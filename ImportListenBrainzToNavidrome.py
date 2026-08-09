@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import glob
@@ -5,6 +6,7 @@ import sqlite3
 import time
 from rapidfuzz import fuzz, process
 
+#region Global Configs
 # User Configuration
 listenbrainz_export_path = './listenbrainz_1Maple_1786052646' #'/path/to/listenbrainz/json/files'  # Replace with the actual path to your JSON files
 navidrome_db_path = 'navidrome.db'  # Replace with the actual path to your Navidrome database file
@@ -12,6 +14,12 @@ username = 'dsimonds'  # Replace with your actual username
 
 # global
 conn = None
+parser = argparse.ArgumentParser(
+    prog='Import ListenBrainz to Navidrome',
+    description='Import ListenBrainz play count into Navidrome.db from ListenBrainz export',
+    epilog='')
+
+#endreagion
 
 def exit_with_error(message):
     print(message)
@@ -19,6 +27,7 @@ def exit_with_error(message):
         database_close(conn)
     exit(1)
 
+#region Database Update Queries
 def db_query_update_play_count(recording_mbid, song, artist, user_id):
     updated_rows = 0
     query = """
@@ -71,7 +80,6 @@ WHERE user_id = ? AND
 
     return 0
 
-    
 def db_query_update_album_play_count(recording_mbid, user_id):
     query = """
 UPDATE annotation
@@ -154,18 +162,22 @@ where
 
         # print(f"{artist}: {song}. {rows[0][0] if rows else 'No rows found'}")
 
-
-
 def db_query_clear_play_count(user_id):
+
+    if not args.reset_count_all:
+        return
+    
     query = """
 UPDATE annotation
 SET play_count = 0
 WHERE user_id = ?;
     """
-    
+
     with conn:
         conn.execute(query, (user_id,))
+#endregion
 
+#region Database Connection
 def db_get_userid(username):
     with conn:
         cursor = conn.execute("SELECT id FROM user WHERE user_name = ?;", (username,))
@@ -183,6 +195,7 @@ def database_connect(conn):
 def database_close(conn):
     conn.close()
 
+#endregion
 
 def process_json_file(file):
     start_time = time.perf_counter()
@@ -241,8 +254,9 @@ def process_json_file(file):
                     # print(f"  Data: {data}")
                     print(f"  Exception: {e}")
 
-    with open(file, 'w', encoding='utf-8') as currentFile:
-        currentFile.writelines(remaining_lines)
+    if args.remove_completed_songs:
+        with open(file, 'w', encoding='utf-8') as currentFile:
+            currentFile.writelines(remaining_lines)
 
     end_time = time.perf_counter()
     print(f"Processed {lineNum} lines in {(end_time - start_time):.6f}s for: {file}")
@@ -251,10 +265,18 @@ def process_json_file(file):
     return lineNum, total_song_play_count, total_fuzzy_attempts, total_album_play_count, total_artist_play_count
 
 def main(path):
-    if path == "/path/to/listenbrainz/json/files":
+    if path == "./":
         path = os.getcwd()
-    files = glob.glob(os.path.join(path, '**/*.jsonl'), recursive=True)
-    # files = glob.glob(os.path.join(path, '*.jsonl'))
+    # files = glob.glob(os.path.join(path, '**/*.jsonl'), recursive=True)
+
+    files = []
+    if os.path.isfile(path):
+        files = glob.glob(path)
+    elif os.path.isdir(path):
+        files = glob.glob(os.path.join(path, '*.jsonl'))
+    else:
+        print(f"invalid file path")
+
     print(f"Found {len(files)} JSON files in the directory: {path}")
 
     fileCount = 0
@@ -271,9 +293,14 @@ def main(path):
     print(f"Processed {lineCount} songs in total")
     print(f"Total song play count updated: {song_play_count}")
     # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
-    # print("Unique recording MBIDs found:")
-    # pprint.pprint(keywordList)
 
+
+#region Start
+parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library')
+parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
+parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
+parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
+args = parser.parse_args()
 
 conn = database_connect(conn)
 user_id = db_get_userid(username)
@@ -281,5 +308,7 @@ if user_id is None:
     exit_with_error("User ID not found.")
 
 db_query_clear_play_count(user_id)
-main(listenbrainz_export_path)
+main(args.path)
 database_close(conn)
+
+#endregion
