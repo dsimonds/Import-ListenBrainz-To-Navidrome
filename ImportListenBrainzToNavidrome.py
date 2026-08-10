@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import json
 import os
 import glob
@@ -28,6 +29,43 @@ def exit_with_error(message):
     exit(1)
 
 #region Database Update Queries
+def db_query_get_ids(recording_mbid, user_id):
+    updated_rows = 0
+    cursor = conn.cursor()
+    cursor.execute("""
+SELECT
+    mf.artist_id,
+    mf.album_id,
+    mf.id
+FROM media_file AS mf
+JOIN annotation AS a ON mf.artist_id = a.item_id
+WHERE user_id = ? AND
+    mf.mbz_recording_id = ?;
+    """, (user_id, recording_mbid))
+
+    rows = cursor.fetchall()
+
+    for row in rows:
+        artist_id, album_id, song_id = row
+        updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
+        
+    return updated_rows
+
+def db_query_update_all_play_count(user_id, artist_id, album_id, song_id):
+    updated_rows = 0
+    query = """
+UPDATE annotation 
+SET play_count = play_count + 1
+WHERE
+    user_id = ?
+    AND item_id in (?, ?, ?);
+        """
+    
+    with conn:
+        updated_rows = conn.execute(query, (user_id, artist_id, album_id, song_id))
+
+    return updated_rows.rowcount
+    
 def db_query_update_play_count(recording_mbid, song, artist, user_id):
     updated_rows = 0
     query = """
@@ -234,6 +272,7 @@ def process_json_file(file):
                     # rows = db_query_get_play_count(recording_mbid, name, artist, user_id)
                     # print(f"updated_rows: {updated_rows}.")
 
+
                     if updated_rows is None or updated_rows == 0:
                         # print(f"No exact match found for {artist} - {name}. Attempting fuzzy matching...")
                         # updated_rows = db_query_update_play_count_fuzzy(name, artist, user_id)
@@ -244,10 +283,10 @@ def process_json_file(file):
                         remaining_lines.append(line)
                         total_song_play_count += updated_rows
 
-                    if updated_rows > 0:
-                        # db_query_update_artist_and_ablum_play_count(recording_mbid, user_id)
-                        total_album_play_count += db_query_update_album_play_count(recording_mbid, user_id)
-                        total_artist_play_count += db_query_update_artist_play_count(recording_mbid, user_id)
+                    # if updated_rows > 0:
+                    #     # db_query_update_artist_and_ablum_play_count(recording_mbid, user_id)
+                    #     total_album_play_count += db_query_update_album_play_count(recording_mbid, user_id)
+                    #     total_artist_play_count += db_query_update_artist_play_count(recording_mbid, user_id)
 
                 except Exception as e:
                     print(f"Error processing line {lineNum} in {file}")
@@ -259,7 +298,7 @@ def process_json_file(file):
             currentFile.writelines(remaining_lines)
 
     end_time = time.perf_counter()
-    print(f"Processed {lineNum} lines in {(end_time - start_time):.6f}s for: {file}")
+    print(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s")
 
     # print(f"total_fuzzy_attempts: {total_fuzzy_attempts}")
     return lineNum, total_song_play_count, total_fuzzy_attempts, total_album_play_count, total_artist_play_count
@@ -272,8 +311,10 @@ def main(path):
     files = []
     if os.path.isfile(path):
         files = glob.glob(path)
+        print(f"Processing file: {path}")
     elif os.path.isdir(path):
-        files = glob.glob(os.path.join(path, '*.jsonl'))
+        files = glob.glob(os.path.join(path, '**/*.jsonl'), recursive=True)
+        print(f"dir: {path}")
     else:
         print(f"invalid file path")
 
@@ -281,17 +322,19 @@ def main(path):
 
     fileCount = 0
     lineCount = 0
+    total_song_play_count = 0
     song_play_count, fuzzy_attempts, album_play_count, artist_play_count = 0, 0, 0, 0
     for file in files:
-        print ("file: ",file)
+        print (f"Processing file: {file}")
         fileCount += 1
         lines, song_play_count, fuzzy_attempts, album_play_count, artist_play_count = process_json_file(file)
         lineCount += lines
+        total_song_play_count += song_play_count
 
 
     print(f"Processed {fileCount} JSON files")
-    print(f"Processed {lineCount} songs in total")
-    print(f"Total song play count updated: {song_play_count}")
+    print(f"Processed {lineCount} songs plays in total")
+    print(f"Total song play count updated: {total_song_play_count}")
     # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
 
 
@@ -302,6 +345,7 @@ parser.add_argument('-p', '--path', action='store', default='./', help='File pat
 parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
 args = parser.parse_args()
 
+total_start_time = time.perf_counter()
 conn = database_connect(conn)
 user_id = db_get_userid(username)
 if user_id is None:
@@ -311,4 +355,8 @@ db_query_clear_play_count(user_id)
 main(args.path)
 database_close(conn)
 
+total_end_time = time.perf_counter()
+total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
+print(f"Completed in {total_end_time - total_start_time}")
+print(f"Completed in {total_time_formatted}")
 #endregion
