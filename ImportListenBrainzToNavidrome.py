@@ -109,12 +109,17 @@ DO UPDATE SET
     play_count = play_count + 1,
     play_date = ?;
     """
+    data = []
 
-    data = [
-        (user_id, song_id, "media_file", "1", play_date, play_date),
-        (user_id, artist_id, "artist", "1", play_date, play_date),
-        (user_id, album_id, "album", "1", play_date, play_date)
-    ]
+    if song_id:
+        data.append((user_id, song_id, "media_file", "1", play_date, play_date))
+
+    if artist_id:
+        data.append((user_id, artist_id, "artist", "1", play_date, play_date))
+
+    if album_id:
+        data.append((user_id, album_id, "album", "1", play_date, play_date))
+
 
     with conn:
             updated_rows = conn.executemany(query, data)
