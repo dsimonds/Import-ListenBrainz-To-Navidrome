@@ -5,6 +5,7 @@ import os
 import glob
 import sqlite3
 import time
+import traceback
 from rapidfuzz import fuzz, process
 
 #region Global Configs
@@ -15,12 +16,13 @@ username = 'dsimonds'  # Replace with your actual username
 
 # global
 conn = None
+
 parser = argparse.ArgumentParser(
     prog='Import ListenBrainz to Navidrome',
     description='Import ListenBrainz play count into Navidrome.db from ListenBrainz export',
     epilog='')
 
-#endreagion
+#endregion
 
 def exit_with_error(message):
     print(message)
@@ -29,27 +31,73 @@ def exit_with_error(message):
     exit(1)
 
 #region Database Update Queries
-def db_query_get_ids(recording_mbid, user_id):
+def db_query_get_ids(recording_mbid, release_mbid, album, user_id):
     updated_rows = 0
-    cursor = conn.cursor()
-    cursor.execute("""
+    rows = []
+
+    if release_mbid:
+        query = """
 SELECT
     mf.artist_id,
     mf.album_id,
     mf.id
 FROM media_file AS mf
 JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ? AND
-    mf.mbz_recording_id = ?;
-    """, (user_id, recording_mbid))
+WHERE user_id = ?
+    AND mf.mbz_recording_id = ?
+    AND mf.mbz_album_id = ?;
+        """
+        cursor = conn.cursor()
+        cursor.execute(query, (user_id, recording_mbid, release_mbid))
+        rows = cursor.fetchall()
 
-    rows = cursor.fetchall()
+
+    if not rows:
+        query = """
+SELECT
+    mf.artist_id,
+    mf.album_id,
+    mf.id
+FROM media_file AS mf
+JOIN annotation AS a ON mf.artist_id = a.item_id
+WHERE user_id = ?
+    AND mf.mbz_recording_id = ?
+    AND mf.album like ?;
+            """
+        cursor = conn.cursor()
+        cursor.execute(query, (user_id, recording_mbid, album))
+        rows = cursor.fetchall()
+
+
+    if not rows:
+        query = """
+SELECT
+    mf.artist_id,
+    mf.album_id,
+    mf.id
+FROM media_file AS mf
+JOIN annotation AS a ON mf.artist_id = a.item_id
+WHERE user_id = ?
+    AND mf.mbz_recording_id = ?;
+                    """
+        cursor = conn.cursor()
+        cursor.execute(query, (user_id, recording_mbid))
+
+        rows = cursor.fetchall()
+
+
+    updated_line_count = 0
+    # if not rows:
+    #     print(f"Unable to find {recording_mbid}, {release_mbid}, {album}, {user_id}")
 
     for row in rows:
         artist_id, album_id, song_id = row
         updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
+        updated_line_count += 1
+        # print(f"Updated Rows: {updated_rows}")
         
-    return updated_rows
+    # return updated_rows
+    return updated_line_count
 
 def db_query_update_all_play_count(user_id, artist_id, album_id, song_id):
     updated_rows = 0
@@ -89,9 +137,9 @@ WHERE
     # if updated_rows.rowcount > 0:
     #     print(f"Updated play count for {artist} - {song}. New play count: {updated_rows.rowcount}")    
     
-    return updated_rows.rowcount  # Return the number of rows updated
+    return updated_rows.rowcount
 
-def db_query_update_play_count_fuzzy(name, artist, user_id):
+def db_query_update_play_count_fuzzy(song, artist, user_id):
     cursor = conn.cursor()
     cursor.execute("""
 SELECT
@@ -100,21 +148,21 @@ SELECT
     mf.mbz_recording_id
 FROM media_file AS mf
 JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ? AND
-    mf.artist like ? AND 
-    mf.title like ?;
-    """, (user_id, artist, name))
-
+WHERE user_id = ?;
+    """, (user_id,)) #(user_id, artist, name))
+    
+    #--AND mf.artist like ? 
+    #--AND mf.title like ?;
     rows = cursor.fetchall()
 
     for row in rows:
-        artist, title, recording_mbid = row
-        similarity_artist = fuzz.ratio(artist.lower(), artist.lower())
-        similarity_title = fuzz.ratio(title.lower(), name.lower())
+        db_artist, db_title, db_recording_mbid = row
+        similarity_artist = fuzz.ratio(db_artist.lower(), artist.lower())
+        similarity_title = fuzz.ratio(db_title.lower(), song.lower())
 
         if similarity_artist > 80 and similarity_title > 80:
             # print(f"Fuzzy match found: {artist} - {title} (Play Count: {play_count})")
-            return db_query_update_play_count(recording_mbid, title, artist, user_id)
+            return db_query_update_play_count(db_recording_mbid, db_title, db_artist, user_id)
 
     return 0
 
@@ -133,7 +181,7 @@ WHERE user_id = ?
     with conn:
         updated_rows = conn.execute(query, (user_id, recording_mbid))
 
-    return updated_rows.rowcount  # Return the number of rows updated
+    return updated_rows.rowcount
 
 def db_query_update_artist_play_count(recording_mbid, user_id):
     query = """
@@ -150,7 +198,7 @@ WHERE user_id = ?
     with conn:
         updated_rows = conn.execute(query, (user_id, recording_mbid))
 
-    return updated_rows.rowcount  # Return the number of rows updated
+    return updated_rows.rowcount
 
 def db_query_update_artist_and_ablum_play_count(recording_mbid, user_id):
     query = """
@@ -174,7 +222,7 @@ WHERE user_id = ?
     with conn:
         updated_rows = conn.execute(query, (user_id, recording_mbid, recording_mbid))
     
-    return updated_rows.rowcount  # Return the number of rows updated
+    return updated_rows.rowcount
 
 def db_query_get_play_count(recording_mbid, song, artist, user_id):
     query ="""
@@ -234,13 +282,14 @@ def database_close(conn):
     conn.close()
 
 #endregion
+def process_json_line(line):
+    return 0
 
-def process_json_file(file):
+def process_json_file(file, total_song_play_count):
     start_time = time.perf_counter()
 
     lineNum = 0
     updated_rows = 0
-    total_song_play_count = 0
     total_fuzzy_attempts = 0
     total_album_play_count = 0
     total_artist_play_count = 0
@@ -254,34 +303,55 @@ def process_json_file(file):
                 data = json.loads(line.strip())
                 # print(f"{data}")
                 # print (f"Data: {data}")
-                name, artist, recording_mbid = None, None, None
+                song, artist, recording_mbid = None, None, None
                 try:
-                    name = data.get("track_metadata", {}).get("track_name", "Unknown")
+                    song = data.get("track_metadata", {}).get("track_name", "Unknown")
                     artist = data.get("track_metadata", {}).get("artist_name", "Unknown")
-                    # print(f"Processing: {artist} - {name}")
-                    # recording_mbid = data.get("track_metadata", {}).get("mbid_mapping", {}).get("recording_mbid", "")
+                    album = data.get("track_metadata", {}).get("release_name", "Unknown")
+                    
+                    # print(f"\r\033[KArtist: {artist} Album: {album} Song: {song}", end="", flush=True)
+
+                    # print(f"Processing: {artist} - {song}")
+                    # recording_mbid = data.get("track_metadata", {}).get("mbid_mapping", {}).get("recording_mbid", "Unknown")
+                    # recording_mbid = data.get("track_metadata", {}).get("mbid_mapping", {}).get("recording_mbid", "Unknown")
+                    # updated_rows = db_query_get_ids(recording_mbid, user_id)
+
                     try:
                         recording_mbid = data.get("track_metadata", {}).get("mbid_mapping", {}).get("recording_mbid", "Unknown")
-                        updated_rows = db_query_update_play_count(recording_mbid, name, artist, user_id)
+                        # updated_rows = db_query_update_play_count(recording_mbid, song, artist, user_id)
+                        # print(f"recording_mbid:{recording_mbid}")
                     except Exception as e:
                         # print(f"{data}")
-                        # print(f"Error extracting recording_mbid from line {lineNum} for {artist} - {name} in {file}")
+                        # print(f"Error extracting recording_mbid from line {lineNum} for {artist} - {song} in {file}")
                         # print(f"  Exception: {e}")
-                        pass  # Continue processing even if there's an error extracting recording_mbid
+                        pass
 
-                    # rows = db_query_get_play_count(recording_mbid, name, artist, user_id)
+                    try:
+                        release_mbid = data.get("track_metadata", {}).get("mbid_mapping", {}).get("release_mbid", "Unknown")
+                        # print(f"release_mbid:{release_mbid}")
+                    except Exception as e:
+                        pass
+
+                    # rows = db_query_get_play_count(recording_mbid, song, artist, user_id)
                     # print(f"updated_rows: {updated_rows}.")
 
+                    if recording_mbid:
+                        updated_rows = db_query_get_ids(recording_mbid, release_mbid, album, user_id)
 
+                    # Fuzzy search if can't find song with MusicBrainz ID
                     if updated_rows is None or updated_rows == 0:
-                        # print(f"No exact match found for {artist} - {name}. Attempting fuzzy matching...")
-                        # updated_rows = db_query_update_play_count_fuzzy(name, artist, user_id)
+                        # print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
+                        # updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
                         # total_fuzzy_attempts += updated_rows
                         pass
-                    else:
-                        # print(f"Updated play count. New play count: {updated_rows}")
+
+                    # Save records that aren't found
+                    if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
+                    elif updated_rows > 0:
                         total_song_play_count += updated_rows
+                        # print(f"\r\033[KArtist: {artist} Album: {album} Song: {song}", end="", flush=True)
+                        print(f"\r\033[KTotal play count added: {total_song_play_count}", end="", flush=True)
 
                     # if updated_rows > 0:
                     #     # db_query_update_artist_and_ablum_play_count(recording_mbid, user_id)
@@ -289,14 +359,17 @@ def process_json_file(file):
                     #     total_artist_play_count += db_query_update_artist_play_count(recording_mbid, user_id)
 
                 except Exception as e:
-                    print(f"Error processing line {lineNum} in {file}")
+                    print() # clears print(f"\r\033[K...
+                    # print(f"Error processing line {lineNum} in {file}")
                     # print(f"  Data: {data}")
-                    print(f"  Exception: {e}")
+                    # print(f"  Exception: {e}")
+                    traceback.print_exc()
 
-    if args.remove_completed_songs:
-        with open(file, 'w', encoding='utf-8') as currentFile:
-            currentFile.writelines(remaining_lines)
+        if args.remove_completed_songs:
+            with open(file, 'w', encoding='utf-8') as currentFile:
+                currentFile.writelines(remaining_lines)
 
+    print() # clears print(f"\r\033[K...
     end_time = time.perf_counter()
     print(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s")
 
@@ -318,23 +391,23 @@ def main(path):
     else:
         print(f"invalid file path")
 
-    print(f"Found {len(files)} JSON files in the directory: {path}")
+    print(f"Found {len(files)} JSON file(s) in the directory: {path}")
 
     fileCount = 0
     lineCount = 0
-    total_song_play_count = 0
-    song_play_count, fuzzy_attempts, album_play_count, artist_play_count = 0, 0, 0, 0
+    this_total_song_play_count = 0
     for file in files:
         print (f"Processing file: {file}")
         fileCount += 1
-        lines, song_play_count, fuzzy_attempts, album_play_count, artist_play_count = process_json_file(file)
+        lines, total_song_play_count, fuzzy_attempts, album_play_count, artist_play_count = process_json_file(file, this_total_song_play_count)
         lineCount += lines
-        total_song_play_count += song_play_count
+        this_total_song_play_count += total_song_play_count
 
-
-    print(f"Processed {fileCount} JSON files")
-    print(f"Processed {lineCount} songs plays in total")
-    print(f"Total song play count updated: {total_song_play_count}")
+    print()
+    print("----- SUMMARY -----")
+    print(f"Processed {fileCount} JSON file(s)")
+    print(f"Processed {lineCount} songs in total")
+    print(f"Total song play count updated: {this_total_song_play_count}")
     # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
 
 
@@ -357,6 +430,5 @@ database_close(conn)
 
 total_end_time = time.perf_counter()
 total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
-print(f"Completed in {total_end_time - total_start_time}")
 print(f"Completed in {total_time_formatted}")
 #endregion
