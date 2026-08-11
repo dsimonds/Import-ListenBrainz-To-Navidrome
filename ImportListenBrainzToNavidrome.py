@@ -6,6 +6,7 @@ import glob
 import sqlite3
 import time
 import traceback
+import re
 import signal
 import sys
 import logging
@@ -26,13 +27,24 @@ parser = argparse.ArgumentParser(
 #endregion
 
 def signal_handler(sig, frame):
-    exit_with_error('')
+    # exit_with_error('')
+    print("\n[!] SIGINT detected. Performing clean-up tasks...")
+    if conn:
+            database_close(conn)
+    sys.exit(0)
 
 def exit_with_error(message):
     print(message)
     if conn:
         database_close(conn)
     sys.exit(0)
+
+def standardize_string(text):
+    text = text.split(' - ', 1)[0]
+    re.sub(r"[\(\[].*?[\)\]]", "", text)
+    text.strip()
+    return text
+
 
 #region Database Update Queries
 def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id):
@@ -109,7 +121,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             WHERE title like ? AND album like ? AND artist like ?;
         """
         cursor = conn.cursor()
-        cursor.execute(query, (song, album, artist))
+        cursor.execute(query, (f"%{song}%", f"%{album}%", f"%{artist}%"))
         rows = cursor.fetchall()
 
     if not rows or (album and not artist):
@@ -119,7 +131,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             WHERE title like ? AND album like ?;
         """
         cursor = conn.cursor()
-        cursor.execute(query, (song, album))
+        cursor.execute(query, (f"%{song}%", f"%{album}%"))
         rows = cursor.fetchall()
 
     if not rows or (artist and not album):
@@ -129,11 +141,20 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             WHERE title like ? AND artist like ?;
         """
         cursor = conn.cursor()
-        cursor.execute(query, (song, artist))
+        cursor.execute(query, (f"%{song}%", f"%{artist}%"))
         rows = cursor.fetchall()
 
+    # remove additional text from song/album. Ex: "Song Title - Remastered" or "Song Title (Deluxe Edition)" -> "Song Title"
+    if not rows:
+        standardized_song = standardize_string(song)
+        standardized_album = standardize_string(song)
+        # if song or album is changed redo queries
+        if (standardized_song != song or standardized_album != album):
+            # log.debug(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"")
+            # print(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"")
+            db_queries_update_by_title(standardized_song, standardized_album, artist, listened_at, user_id)
+
     updated_line_count = 0
-    
     for row in rows:
         artist_id, album_id, song_id = row
         # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
