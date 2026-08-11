@@ -10,6 +10,7 @@ import signal
 import sys
 import logging
 from rapidfuzz import fuzz, process
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 #region Global Configs
 # User Configuration
@@ -113,7 +114,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     if not song:
         return 0
 
-    print(f"Attempting to search for {song}, {album}, {artist}")
+    # print(f"Attempting to search for {song}, {album}, {artist}")
 
     if album and artist:
         query = """
@@ -375,7 +376,7 @@ def setup_logger(name, fname, log_time, level=logging.INFO):
     else:
         formatter = logging.Formatter('%(message)s')
 
-    handler = logging.FileHandler(fname)
+    handler = logging.FileHandler(fname, mode="a", encoding="utf-8")
     handler.setFormatter(formatter)
 
     logger = logging.getLogger(name)
@@ -427,7 +428,7 @@ def process_json_file(file, conn, total_song_play_count):
 
                     # Fuzzy search if can't find song with MusicBrainz ID
                     if updated_rows is None or updated_rows == 0:
-                        print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
+                        # print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
                         updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
                         total_fuzzy_attempts += updated_rows
                         pass
@@ -435,7 +436,11 @@ def process_json_file(file, conn, total_song_play_count):
                     # Save records that aren't found
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
-                        missing_songs_log.info(f"{artist}, {album}, {song}")
+                        try:
+                            missing_songs_log.info(f"\"{artist}\", \"{album}\", \"{song}\"")
+                        except Exception as e:
+                            log.debug(f"Exception writing to log. {e}")
+                            traceback.print_exc()
                     elif updated_rows > 0:
                         total_song_play_count += updated_rows
                         # print(f"updated rows: {updated_rows}")
