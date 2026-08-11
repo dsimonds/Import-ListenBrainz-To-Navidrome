@@ -6,6 +6,8 @@ import glob
 import sqlite3
 import time
 import traceback
+import signal
+import sys
 from rapidfuzz import fuzz, process
 
 #region Global Configs
@@ -21,11 +23,14 @@ parser = argparse.ArgumentParser(
 
 #endregion
 
+def signal_handler(sig, frame):
+    exit_with_error('')
+
 def exit_with_error(message):
     print(message)
     if conn:
         database_close(conn)
-    exit(1)
+    sys.exit(0)
 
 #region Database Update Queries
 def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id):
@@ -483,6 +488,7 @@ parser.add_argument('--reset-count-per-song', action='store_true', default=False
 parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
 parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
 args = parser.parse_args()
+signal.signal(signal.SIGINT, signal_handler)
 
 total_start_time = time.perf_counter()
 
