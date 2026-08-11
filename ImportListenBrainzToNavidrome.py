@@ -44,15 +44,10 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
 
     if release_mbid:
         query = """
-SELECT
-    mf.artist_id,
-    mf.album_id,
-    mf.id
-FROM media_file AS mf
-JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ?
-    AND mf.mbz_recording_id = ?
-    AND mf.mbz_album_id = ?;
+            SELECT mf.artist_id, mf.album_id, mf.id
+            FROM media_file AS mf
+            JOIN annotation AS a ON mf.artist_id = a.item_id
+            WHERE user_id = ? AND mf.mbz_recording_id = ? AND mf.mbz_album_id = ?;
         """
         cursor = conn.cursor()
         cursor.execute(query, (user_id, recording_mbid, release_mbid))
@@ -61,16 +56,11 @@ WHERE user_id = ?
 
     if not rows:
         query = """
-SELECT
-    mf.artist_id,
-    mf.album_id,
-    mf.id
-FROM media_file AS mf
-JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ?
-    AND mf.mbz_recording_id = ?
-    AND mf.album like ?;
-            """
+            SELECT mf.artist_id, mf.album_id, mf.id
+            FROM media_file AS mf
+            JOIN annotation AS a ON mf.artist_id = a.item_id
+            WHERE user_id = ? AND mf.mbz_recording_id = ?AND mf.album like ?;
+        """
         cursor = conn.cursor()
         cursor.execute(query, (user_id, recording_mbid, album))
         rows = cursor.fetchall()
@@ -78,15 +68,11 @@ WHERE user_id = ?
 
     if not rows:
         query = """
-SELECT
-    mf.artist_id,
-    mf.album_id,
-    mf.id
-FROM media_file AS mf
-JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ?
-    AND mf.mbz_recording_id = ?;
-                    """
+            SELECT mf.artist_id, mf.album_id, mf.id
+            FROM media_file AS mf
+            JOIN annotation AS a ON mf.artist_id = a.item_id
+            WHERE user_id = ? AND mf.mbz_recording_id = ?;
+        """
         cursor = conn.cursor()
         cursor.execute(query, (user_id, recording_mbid))
 
@@ -118,43 +104,30 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
 
     if album and artist:
         query = """
-SELECT
-    artist_id,
-    album_id,
-    id
-FROM media_file
-WHERE title like ?
-    AND album like ?
-    AND artist like ?;
-            """
+            SELECT artist_id, album_id, id
+            FROM media_file
+            WHERE title like ? AND album like ? AND artist like ?;
+        """
         cursor = conn.cursor()
         cursor.execute(query, (song, album, artist))
         rows = cursor.fetchall()
 
     if not rows or (album and not artist):
         query = """
-SELECT
-    artist_id,
-    album_id,
-    id
-FROM media_file
-WHERE title like ?
-    AND album like ?;
-            """
+            SELECT artist_id, album_id, id
+            FROM media_file
+            WHERE title like ? AND album like ?;
+        """
         cursor = conn.cursor()
         cursor.execute(query, (song, album))
         rows = cursor.fetchall()
 
     if not rows or (artist and not album):
         query = """
-SELECT
-    artist_id,
-    album_id,
-    id
-FROM media_file
-WHERE title like ?
-    AND artist like ?;
-            """
+            SELECT artist_id, album_id, id
+            FROM media_file
+            WHERE title like ? AND artist like ?;
+        """
         cursor = conn.cursor()
         cursor.execute(query, (song, artist))
         rows = cursor.fetchall()
@@ -171,20 +144,15 @@ WHERE title like ?
     # return updated_rows
     return updated_line_count
 
-        
-
-
 def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at):
     
     play_date = str(datetime.datetime.fromtimestamp(listened_at, tz=datetime.timezone.utc))
 
     query = """
-INSERT INTO annotation(user_id, item_id, item_type, play_count, play_date) 
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(user_id, item_id, item_type) 
-DO UPDATE SET 
-    play_count = play_count + 1,
-    play_date = ?;
+        INSERT INTO annotation(user_id, item_id, item_type, play_count, play_date) 
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, item_id, item_type) 
+            DO UPDATE SET play_count = play_count + 1, play_date = ?;
     """
     data = []
 
@@ -206,18 +174,14 @@ DO UPDATE SET
 def db_query_update_play_count(recording_mbid, song, artist, user_id):
     updated_rows = 0
     query = """
-UPDATE annotation 
-SET play_count = play_count + 1
-WHERE 
-    user_id = ? AND
-    item_id IN
-    (SELECT mf.id
-    FROM media_file mf
-    WHERE 
-        mf.mbz_recording_id = 
-            ? AND 
-            mf.artist like ? AND 
-            mf.title like ?);
+        UPDATE annotation 
+        SET play_count = play_count + 1
+        WHERE user_id = ? AND item_id IN
+        (
+            SELECT mf.id
+            FROM media_file mf
+            WHERE mf.mbz_recording_id =  ? AND mf.artist like ? AND mf.title like ?
+        );
     """
 
     with conn:
@@ -231,13 +195,10 @@ WHERE
 def db_query_update_play_count_fuzzy(song, artist, user_id):
     cursor = conn.cursor()
     cursor.execute("""
-SELECT
-    mf.artist,
-    mf.title,
-    mf.mbz_recording_id
-FROM media_file AS mf
-JOIN annotation AS a ON mf.artist_id = a.item_id
-WHERE user_id = ?;
+        SELECT mf.artist, mf.title, mf.mbz_recording_id
+        FROM media_file AS mf
+        JOIN annotation AS a ON mf.artist_id = a.item_id
+        WHERE user_id = ?;
     """, (user_id,)) #(user_id, artist, name))
     
     #--AND mf.artist like ? 
@@ -255,97 +216,15 @@ WHERE user_id = ?;
 
     return 0
 
-def db_query_update_album_play_count(recording_mbid, user_id):
-    query = """
-UPDATE annotation
-SET play_count = play_count + 1
-WHERE user_id = ?
-    AND item_id = (
-        SELECT mf.album_id
-          FROM media_file AS mf
-          WHERE mf.mbz_recording_id like ?
-    );
-    """
-
-    with conn:
-        updated_rows = conn.execute(query, (user_id, recording_mbid))
-
-    return updated_rows.rowcount
-
-def db_query_update_artist_play_count(recording_mbid, user_id):
-    query = """
-UPDATE annotation
-SET play_count = play_count + 1
-WHERE user_id = ?
-    AND item_id = (
-        SELECT mf.artist_id
-          FROM media_file AS mf
-          WHERE mf.mbz_recording_id like ?
-    );
-    """
-
-    with conn:
-        updated_rows = conn.execute(query, (user_id, recording_mbid))
-
-    return updated_rows.rowcount
-
-def db_query_update_artist_and_ablum_play_count(recording_mbid, user_id):
-    query = """
-UPDATE annotation
-SET play_count = play_count + 1
-WHERE user_id = ?
-  AND (
-    item_id IN (
-      SELECT mf.artist_id
-        FROM media_file AS mf
-        WHERE mf.mbz_recording_id like ?
-    )
-    OR item_ID IN (
-      SELECT mf.album_id
-        FROM media_file AS mf
-        WHERE mf.mbz_recording_id like ?
-    )
-  );
-    """
-
-    with conn:
-        updated_rows = conn.execute(query, (user_id, recording_mbid, recording_mbid))
-    
-    return updated_rows.rowcount
-
-def db_query_get_play_count(recording_mbid, song, artist, user_id):
-    query ="""
-SELECT a.play_count
-FROM annotation a
-where
-    a.user_id = ? AND
-    a.item_id =
-        (SELECT mf.id
-        FROM media_file mf
-        WHERE mf.mbz_recording_id = ? AND
-        mf.artist like ? AND
-        mf.title like ?);
-    """
-    
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute(query, (user_id, recording_mbid, artist, song))
-        rows = cursor.fetchall()
-        # print(f"rows: {rows}. rows[0][0]: {rows[0][0] if rows else 'No rows found'}")
-        if rows:
-            return rows[0][0]  # Return the play_count
-
-        # print(f"{artist}: {song}. {rows[0][0] if rows else 'No rows found'}")
-
 def db_query_clear_play_count(user_id):
 
     if not args.reset_count_all:
         return
     
     query = """
-UPDATE annotation
-SET play_count = 0
-WHERE user_id = ?;
+        UPDATE annotation
+        SET play_count = 0
+        WHERE user_id = ?;
     """
 
     with conn:
@@ -419,6 +298,10 @@ def process_json_file(file, conn, total_song_play_count):
                     if mb_mapping:
                         recording_mbid = mb_mapping.get("recording_mbid", "Unknown")
                         release_mbid = mb_mapping.get("release_mbid", "Unknown")
+                        artists = mb_mapping.get("artists", "Unknown")
+                        # only get first artist in list for simplicity
+                        if len(artists) > 0:
+                            artist_mbid = artists[0].get("artist_mbid", "Unknown")
 
                     if recording_mbid:
                         updated_rows = db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id)
@@ -437,7 +320,7 @@ def process_json_file(file, conn, total_song_play_count):
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
                         try:
-                            missing_songs_log.info(f"\"{artist}\", \"{album}\", \"{song}\"")
+                            missing_songs_log.info(f"\"{artist}\", \"{album}\", \"{song}\", \"{artist_mbid}\", \"{release_mbid}\", \"{recording_mbid}\"")
                         except Exception as e:
                             log.debug(f"Exception writing to log. {e}")
                             traceback.print_exc()
@@ -508,8 +391,18 @@ args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
 
 # create loggers
-log = setup_logger("debug_logger", "ImportListenBrainzToNavidrome.log", True, logging.DEBUG)
-missing_songs_log = setup_logger("info_logger", "ImportListenBrainz_missing_songs.log", False)
+log_filename = "ImportListenBrainzToNavidrome.log"
+missing_songs_filename = "ImportListenBrainz_missing_songs.csv"
+
+log = setup_logger("debug_logger", log_filename, True, logging.DEBUG)
+missing_songs_log = setup_logger("info_logger", missing_songs_filename, False)
+
+# add csv header if first entry
+if (
+        (os.path.exists(missing_songs_filename) and os.path.getsize(missing_songs_filename) == 0)
+        or not os.path.exists(missing_songs_filename)
+    ):
+    missing_songs_log.info(f"\"artist\", \"album\", \"song\", \"artist_mbid\", \"release_mbid\", \"recording_mbid\"")
 
 total_start_time = time.perf_counter()
 
