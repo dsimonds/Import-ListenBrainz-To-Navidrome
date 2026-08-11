@@ -28,9 +28,12 @@ def exit_with_error(message):
     exit(1)
 
 #region Database Update Queries
-def db_query_get_ids(recording_mbid, release_mbid, album, listened_at, user_id):
+def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id):
     updated_rows = 0
     rows = []
+
+    if not recording_mbid:
+        return 0
 
     if release_mbid:
         query = """
@@ -96,6 +99,79 @@ WHERE user_id = ?
         
     # return updated_rows
     return updated_line_count
+
+def db_queries_update_by_title(song, album, artist, listened_at, user_id):
+    updated_rows = 0
+    rows = []
+
+    if not song:
+        return 0
+
+    print(f"Attempting to search for {song}, {album}, {artist}")
+
+    if album and artist:
+        query = """
+SELECT
+    artist_id,
+    album_id,
+    id
+FROM media_file
+WHERE title like ?
+    AND album like ?
+    AND artist like ?;
+            """
+        cursor = conn.cursor()
+        cursor.execute(query, (song, album, artist))
+        rows = cursor.fetchall()
+        if rows:
+            print(f"Found #1 {song}, {album}, {artist}")
+
+    if not rows or (album and not artist):
+        query = """
+SELECT
+    artist_id,
+    album_id,
+    id
+FROM media_file
+WHERE title like ?
+    AND album like ?;
+            """
+        cursor = conn.cursor()
+        cursor.execute(query, (song, album))
+        rows = cursor.fetchall()
+        if rows:
+            print(f"Found #2 {song}, {album}, {artist}")
+
+    if not rows or (artist and not album):
+        query = """
+SELECT
+    artist_id,
+    album_id,
+    id
+FROM media_file
+WHERE title like ?
+    AND artist like ?;
+            """
+        cursor = conn.cursor()
+        cursor.execute(query, (song, artist))
+        rows = cursor.fetchall()
+        if rows:
+            print(f"Found #3 {song}, {album}, {artist}")
+
+    updated_line_count = 0
+    
+    for row in rows:
+        artist_id, album_id, song_id = row
+        # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
+        db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
+        updated_line_count += 1
+        # print(f"Updated Rows: {updated_rows}")
+            
+    # return updated_rows
+    return updated_line_count
+
+        
+
 
 def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at):
     
@@ -317,8 +393,8 @@ def process_json_file(file, conn, total_song_play_count):
                 song, artist, recording_mbid = None, None, None
                 try:
                     song = data.get("track_metadata", {}).get("track_name", "Unknown")
-                    artist = data.get("track_metadata", {}).get("artist_name", "Unknown")
                     album = data.get("track_metadata", {}).get("release_name", "Unknown")
+                    artist = data.get("track_metadata", {}).get("artist_name", "Unknown")
                     listened_at = data.get("listened_at", {})
                     
                     mb_mapping = data.get("track_metadata", {}).get("mbid_mapping", {})
@@ -327,18 +403,22 @@ def process_json_file(file, conn, total_song_play_count):
                         release_mbid = mb_mapping.get("release_mbid", "Unknown")
 
                     if recording_mbid:
-                        updated_rows = db_query_get_ids(recording_mbid, release_mbid, album, listened_at, user_id)
+                        updated_rows = db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id)
+
+                    if updated_rows is None or updated_rows == 0:
+                        updated_rows = db_queries_update_by_title(song, album, artist, listened_at, user_id)
 
                     # Fuzzy search if can't find song with MusicBrainz ID
                     if updated_rows is None or updated_rows == 0:
-                        # print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
-                        # updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
-                        # total_fuzzy_attempts += updated_rows
+                        print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
+                        updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
+                        total_fuzzy_attempts += updated_rows
                         pass
 
                     # Save records that aren't found
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
+
                     elif updated_rows > 0:
                         total_song_play_count += updated_rows
                         # print(f"updated rows: {updated_rows}")
