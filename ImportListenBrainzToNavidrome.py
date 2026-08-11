@@ -8,6 +8,7 @@ import time
 import traceback
 import signal
 import sys
+import logging
 from rapidfuzz import fuzz, process
 
 #region Global Configs
@@ -374,6 +375,23 @@ def database_connect(conn):
 def database_close(conn):
     conn.close()
 
+def setup_logger(name, fname, log_time, level=logging.INFO):
+    if log_time:
+        formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(levelname)s - %(message)s')
+    else:
+        formatter = logging.Formatter('%(message)s')
+
+    handler = logging.FileHandler(fname)
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.addHandler(handler)
+    
+    logger.propagate = False
+    
+    return logger
+
 #endregion
 def process_json_line(line):
     return 0
@@ -423,7 +441,7 @@ def process_json_file(file, conn, total_song_play_count):
                     # Save records that aren't found
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
-
+                        missing_songs_log.info(f"{artist}, {album}, {song}")
                     elif updated_rows > 0:
                         total_song_play_count += updated_rows
                         # print(f"updated rows: {updated_rows}")
@@ -489,6 +507,10 @@ parser.add_argument('-p', '--path', action='store', default='./', help='File pat
 parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
 args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
+
+# create loggers
+log = setup_logger("debug_logger", "ImportListenBrainzToNavidrome.log", True, logging.DEBUG)
+missing_songs_log = setup_logger("info_logger", "ImportListenBrainz_missing_songs.log", False)
 
 total_start_time = time.perf_counter()
 
