@@ -129,8 +129,6 @@ WHERE title like ?
         cursor = conn.cursor()
         cursor.execute(query, (song, album, artist))
         rows = cursor.fetchall()
-        if rows:
-            print(f"Found #1 {song}, {album}, {artist}")
 
     if not rows or (album and not artist):
         query = """
@@ -145,8 +143,6 @@ WHERE title like ?
         cursor = conn.cursor()
         cursor.execute(query, (song, album))
         rows = cursor.fetchall()
-        if rows:
-            print(f"Found #2 {song}, {album}, {artist}")
 
     if not rows or (artist and not album):
         query = """
@@ -161,8 +157,6 @@ WHERE title like ?
         cursor = conn.cursor()
         cursor.execute(query, (song, artist))
         rows = cursor.fetchall()
-        if rows:
-            print(f"Found #3 {song}, {album}, {artist}")
 
     updated_line_count = 0
     
