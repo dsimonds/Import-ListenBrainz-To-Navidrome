@@ -311,7 +311,7 @@ def sort_csv(fname):
     )
 
     header.append("count")
-    with open("sort_csv_improved.csv", mode='w', newline='', encoding='utf-8') as file:
+    with open(fname, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)
         for row, count in sorted_rows:
