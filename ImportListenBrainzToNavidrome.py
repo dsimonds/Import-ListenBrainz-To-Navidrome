@@ -299,19 +299,23 @@ def log(message, log_name="default_log", print_to_console=False):
 
 #region csv processor
 def sort_csv(fname):
-    with open(fname, mode='r', newline='') as file:
+    with open(fname, mode='r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         header = next(reader)
         row_counts = Counter(tuple(row) for row in reader)
-        # sort by row count, then by artist > album > song title
-        sorted_rows = dict(sorted(row_counts.items(), key=lambda item: (-item[1],item[0][0],item[0][1],item[0][3]) ))
 
-    header = header + ["count"]
-    with open(fname, mode='w', newline='') as file:
+    # sort by row count, then by artist > album > song title
+    sorted_rows = sorted(
+        row_counts.items(), 
+        key=lambda x: (-x[1], x[0][0], x[0][1], x[0][3])
+    )
+
+    header.append("count")
+    with open("sort_csv_improved.csv", mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)
-        for row, count in sorted_rows.items():
-            writer.writerow(list(row) + [count])
+        for row, count in sorted_rows:
+            writer.writerow((*row, count))
 #end region
 
 #region main
