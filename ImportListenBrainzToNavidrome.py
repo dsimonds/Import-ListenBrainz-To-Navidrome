@@ -27,14 +27,12 @@ parser = argparse.ArgumentParser(
 #endregion
 
 def signal_handler(sig, frame):
-    # exit_with_error('')
-    print("\n[!] SIGINT detected. Performing clean-up tasks...")
+    print("\n[!] SIGINT (stop signal) detected. Performing clean-up tasks...")
     if conn:
-            database_close(conn)
+        database_close(conn)
     sys.exit(0)
 
-def exit_with_error(message):
-    print(message)
+def exit_script():
     if conn:
         database_close(conn)
     sys.exit(0)
@@ -93,14 +91,14 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
 
     updated_line_count = 0
     # if not rows:
-    #     print(f"Unable to find {recording_mbid}, {release_mbid}, {album}, {user_id}")
+    #     log(f"Unable to find {recording_mbid}, {release_mbid}, {album}, {user_id}", default_log)
 
     for row in rows:
         artist_id, album_id, song_id = row
         # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
         db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
-        # print(f"Updated Rows: {updated_rows}")
+        # log(f"Updated Rows: {updated_rows}", default_log)
         
     # return updated_rows
     return updated_line_count
@@ -112,7 +110,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     if not song:
         return 0
 
-    # print(f"Attempting to search for {song}, {album}, {artist}")
+    # log(f"Attempting to search for {song}, {album}, {artist}", default_log)
 
     if album and artist:
         query = """
@@ -150,8 +148,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
         standardized_album = standardize_string(song)
         # if song or album is changed redo queries
         if (standardized_song != song or standardized_album != album):
-            # log.debug(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"")
-            # print(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"")
+            # log(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"", default_log, True)
             db_queries_update_by_title(standardized_song, standardized_album, artist, listened_at, user_id)
 
     updated_line_count = 0
@@ -160,7 +157,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
         # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
         db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
-        # print(f"Updated Rows: {updated_rows}")
+        # log(f"Updated Rows: {updated_rows}", default_log)
             
     # return updated_rows
     return updated_line_count
@@ -209,7 +206,7 @@ def db_query_update_play_count(recording_mbid, song, artist, user_id):
             updated_rows = conn.execute(query, (user_id, recording_mbid, artist, song))
 
     # if updated_rows.rowcount > 0:
-    #     print(f"Updated play count for {artist} - {song}. New play count: {updated_rows.rowcount}")    
+    #     log(f"Updated play count for {artist} - {song}. New play count: {updated_rows.rowcount}", default_log)
     
     return updated_rows.rowcount
 
@@ -232,7 +229,7 @@ def db_query_update_play_count_fuzzy(song, artist, user_id):
         similarity_title = fuzz.ratio(db_title.lower(), song.lower())
 
         if similarity_artist > 80 and similarity_title > 80:
-            # print(f"Fuzzy match found: {artist} - {title} (Play Count: {play_count})")
+            # log(f"Fuzzy match found: {artist} - {title} (Play Count: {play_count})", default_log)
             return db_query_update_play_count(db_recording_mbid, db_title, db_artist, user_id)
 
     return 0
@@ -260,7 +257,7 @@ def db_get_userid(username):
         if result:
             return result[0]
         else:
-            print(f"User '{username}' not found in the database.")
+            log(f"User '{username}' not found in the database. Unable to continue. Exiting", default_log, True)
             return None
 
 def database_connect(conn):
@@ -270,6 +267,9 @@ def database_connect(conn):
 def database_close(conn):
     conn.close()
 
+#endregion
+
+#region logger
 def setup_logger(name, fname, log_time, level=logging.INFO):
     if log_time:
         formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(levelname)s - %(message)s')
@@ -287,7 +287,14 @@ def setup_logger(name, fname, log_time, level=logging.INFO):
     
     return logger
 
+def log(message, log_name="default_log", print_to_console=False):
+    # print first in case write to log fails
+    if print_to_console:
+        print(message)
+    logger = logging.getLogger(log_name)
+    logger.info(message)
 #endregion
+
 def process_json_line(line):
     return 0
 
@@ -299,6 +306,7 @@ def process_json_file(file, conn, total_song_play_count):
     total_fuzzy_attempts = 0
     total_album_play_count = 0
     total_artist_play_count = 0
+    file_play_count = 0
     with open(file, encoding='utf-8', mode='r') as currentFile:
         lines = currentFile.readlines()
         remaining_lines = []
@@ -332,7 +340,7 @@ def process_json_file(file, conn, total_song_play_count):
 
                     # Fuzzy search if can't find song with MusicBrainz ID
                     if updated_rows is None or updated_rows == 0:
-                        # print(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...")
+                        # log(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...", debug_log)
                         updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
                         total_fuzzy_attempts += updated_rows
                         pass
@@ -341,31 +349,33 @@ def process_json_file(file, conn, total_song_play_count):
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
                         try:
-                            missing_songs_log.info(f"\"{artist}\", \"{album}\", \"{song}\", \"{artist_mbid}\", \"{release_mbid}\", \"{recording_mbid}\"")
+                            log(f"\"{artist}\", \"{album}\", \"{song}\", \"{artist_mbid}\", \"{release_mbid}\", \"{recording_mbid}\"", missing_songs_log)
                         except Exception as e:
-                            log.debug(f"Exception writing to log. {e}")
-                            traceback.print_exc()
+                            log(f"Exception writing to log. {e}", default_log, True)
+                            log(f"{traceback.print_exc()}", default_log, True)
                     elif updated_rows > 0:
-                        total_song_play_count += updated_rows
-                        # print(f"updated rows: {updated_rows}")
-                        # print(f"total play count: {total_song_play_count}")
+                        total_song_play_count += updated_rows   # persists for each file
+                        file_play_count += updated_rows         # only for current file
+                        print(f"\r\033[KFile: {file} Play count: {file_play_count}", end="", flush=True)
+                        # log(f"updated rows: {updated_rows}", default_log)
+                        # log(f"total play count: {total_song_play_count}", default_log)
                         # print(f"\r\033[KArtist: {artist} Album: {album} Song: {song}", end="", flush=True)
-                        print(f"\r\033[KTotal play count added: {total_song_play_count}", end="", flush=True)
+                        # print(f"\r\033[KTotal play count added: {total_song_play_count}", end="", flush=True)
 
                 except Exception as e:
                     print() # clears print(f"\r\033[K...
                     # print(f"Error processing line {lineNum} in {file}")
                     # print(f"  Data: {data}")
                     # print(f"  Exception: {e}")
-                    traceback.print_exc()
+                    log(f"{traceback.print_exc()}", default_log, True)
 
         if args.remove_completed_songs:
             with open(file, 'w', encoding='utf-8') as currentFile:
                 currentFile.writelines(remaining_lines)
 
-    print() # clears print(f"\r\033[K...
+    # print() # clears print(f"\r\033[K...
     end_time = time.perf_counter()
-    print(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s")
+    log(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s", default_log)
 
     # print(f"total_fuzzy_attempts: {total_fuzzy_attempts}")
     return lineNum, total_song_play_count, total_fuzzy_attempts, total_album_play_count, total_artist_play_count
@@ -377,29 +387,39 @@ def main(path, conn):
     files = []
     if os.path.isfile(path):
         files = glob.glob(path)
-        print(f"Processing file: {path}")
+        log(f"Processing file: {path}", default_log, True)
     elif os.path.isdir(path):
         files = glob.glob(os.path.join(path, '**/*.jsonl'), recursive=True)
-        print(f"dir: {path}")
+        log(f"dir: {path}", default_log, True)
     else:
-        print(f"invalid file path")
+        log(f"invalid file path", default_log)
 
-    print(f"Found {len(files)} JSON file(s) in the directory: {path}")
+    log(f"Found {len(files)} JSON file(s) in the directory: {path}", default_log, True)
 
     fileCount = 0
     lineCount = 0
     total_song_play_count = 0
     for file in files:
-        print (f"Processing file: {file}")
+        # print (f"Processing file: {file}")
+        print()
+        print(f"\r\033[KFile: {file}", end="", flush=False)
         fileCount += 1
         lines, total_song_play_count, fuzzy_attempts, album_play_count, artist_play_count = process_json_file(file, conn, total_song_play_count)
+        print()
+        log(f"Current total play count: {total_song_play_count}", default_log, True)
         lineCount += lines
 
     print()
-    print("----- SUMMARY -----")
-    print(f"Processed {fileCount} JSON file(s)")
-    print(f"Processed {lineCount} songs in total")
-    print(f"Total song play count updated: {total_song_play_count}")
+    log("----- SUMMARY -----", default_log, True)
+    log(f"Processed {fileCount} JSON file(s)", default_log, True)
+    log(f"Processed {lineCount} songs in total", default_log, True)
+    log(f"Total song play count updated: {total_song_play_count}", default_log, True)
+
+    
+    # log(f"""----- SUMMARY -----\n
+    # Processed {fileCount} JSON file(s)\n
+    # Processed {lineCount} songs in total\n
+    # Total song play count updated: {total_song_play_count}""", default_log, True)
     # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
 
 
@@ -408,6 +428,7 @@ parser.add_argument('--reset-count-all', action='store_true', default=False, hel
 parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
 parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
 parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
+parser.add_argument('-id', '--mb_id', action='store_true', default=False, help='Improves speed by only updating if MB ID is a match, doesn''t perform text based matching')
 args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
 
@@ -415,15 +436,17 @@ signal.signal(signal.SIGINT, signal_handler)
 log_filename = "ImportListenBrainzToNavidrome.log"
 missing_songs_filename = "ImportListenBrainz_missing_songs.csv"
 
-log = setup_logger("debug_logger", log_filename, True, logging.DEBUG)
-missing_songs_log = setup_logger("info_logger", missing_songs_filename, False)
+default_log = "default_log"
+missing_songs_log = "missing_songs_log"
+setup_logger(default_log, log_filename, True, logging.DEBUG)
+setup_logger(missing_songs_log, missing_songs_filename, False)
 
 # add csv header if first entry
 if (
         (os.path.exists(missing_songs_filename) and os.path.getsize(missing_songs_filename) == 0)
         or not os.path.exists(missing_songs_filename)
     ):
-    missing_songs_log.info(f"\"artist\", \"album\", \"song\", \"artist_mbid\", \"release_mbid\", \"recording_mbid\"")
+    log(f"\"artist\", \"album\", \"song\", \"artist_mbid\", \"release_mbid\", \"recording_mbid\"", missing_songs_log)
 
 total_start_time = time.perf_counter()
 
@@ -431,7 +454,7 @@ conn = None
 conn = database_connect(conn)
 user_id = db_get_userid(username)
 if user_id is None:
-    exit_with_error("User ID not found.")
+    exit_script("User ID not found.")
 
 db_query_clear_play_count(user_id)
 main(args.path, conn)
