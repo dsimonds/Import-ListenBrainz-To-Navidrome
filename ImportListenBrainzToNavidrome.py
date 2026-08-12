@@ -11,6 +11,7 @@ import signal
 import sys
 import logging
 import csv
+from collections import Counter
 from rapidfuzz import fuzz, process
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -300,17 +301,28 @@ def log(message, log_name="default_log", print_to_console=False):
 def sort_csv(fname):
     with open(fname, mode='r', newline='') as file:
         reader = csv.reader(file)
-        header = next(reader)  # Save the header row
-        
+        header = next(reader)
+
+        # sort by artist > album > song
         sorted_rows = sorted(
             reader,
             key=lambda row: (row[0], row[1], row[3])
         )
 
+        # get count of each record and sort by count
+        row_counts = Counter(tuple(row) for row in sorted_rows)
+        sorted_rows = sorted(
+            row_counts.items(),
+            key=lambda row: row[1], reverse=True
+        )
+
+    header = header + ["count"]
+
     with open(fname, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(header)
-        writer.writerows(sorted_rows)
+        for row, count in sorted_rows:
+            writer.writerow(list(row) + [count])
 #end region
 
 #region main
