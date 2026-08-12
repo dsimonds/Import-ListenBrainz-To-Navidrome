@@ -340,7 +340,8 @@ def process_json_file(file, conn, total_song_play_count):
             if line.strip():  # Skip empty lines
                 data = json.loads(line.strip())
                 
-                song, artist, recording_mbid = None, None, None
+                song = album = artist = artists = None
+                recording_mbid = release_mbid = artist_mbid = None
                 try:
                     song = data.get("track_metadata", {}).get("track_name", "Unknown")
                     album = data.get("track_metadata", {}).get("release_name", "Unknown")
@@ -352,8 +353,8 @@ def process_json_file(file, conn, total_song_play_count):
                         recording_mbid = mb_mapping.get("recording_mbid", "Unknown")
                         release_mbid = mb_mapping.get("release_mbid", "Unknown")
                         artists = mb_mapping.get("artists", "Unknown")
-                        # only get first artist in list for simplicity
-                        if len(artists) > 0:
+                        # if multiple artists, only get first artist in list for simplicity
+                        if artists:
                             artist_mbid = artists[0].get("artist_mbid", "Unknown")
 
                     if recording_mbid:
@@ -370,11 +371,12 @@ def process_json_file(file, conn, total_song_play_count):
                         pass
 
                     # Save records that aren't found
-                    if updated_rows is None or updated_rows == 0:
+                    if not updated_rows or updated_rows == 0:
                         remaining_lines.append(line)
                         try:
                             log(f"\"{artist}\",\"{album}\",\"{song}\",\"{artist_mbid}\",\"{release_mbid}\",\"{recording_mbid}\"", missing_songs_log)
                         except Exception as e:
+                            print()
                             log(f"Exception writing to log. {e}", default_log, True)
                             log(f"{traceback.print_exc()}", default_log, True)
                     elif updated_rows > 0:
