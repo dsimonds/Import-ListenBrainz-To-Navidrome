@@ -10,6 +10,7 @@ import re
 import signal
 import sys
 import logging
+import csv
 from rapidfuzz import fuzz, process
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -295,6 +296,24 @@ def log(message, log_name="default_log", print_to_console=False):
     logger.info(message)
 #endregion
 
+#region csv processor
+def sort_csv(fname):
+    with open(fname, mode='r', newline='') as file:
+        reader = csv.reader(file)
+        header = next(reader)  # Save the header row
+        
+        sorted_rows = sorted(
+            reader,
+            key=lambda row: (row[0], row[1], row[3])
+        )
+
+    with open(fname, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(header)
+        writer.writerows(sorted_rows)
+#end region
+
+#region main
 def process_json_line(line):
     return 0
 
@@ -349,7 +368,7 @@ def process_json_file(file, conn, total_song_play_count):
                     if updated_rows is None or updated_rows == 0:
                         remaining_lines.append(line)
                         try:
-                            log(f"\"{artist}\", \"{album}\", \"{song}\", \"{artist_mbid}\", \"{release_mbid}\", \"{recording_mbid}\"", missing_songs_log)
+                            log(f"\"{artist}\",\"{album}\",\"{song}\",\"{artist_mbid}\",\"{release_mbid}\",\"{recording_mbid}\"", missing_songs_log)
                         except Exception as e:
                             log(f"Exception writing to log. {e}", default_log, True)
                             log(f"{traceback.print_exc()}", default_log, True)
@@ -421,7 +440,7 @@ def main(path, conn):
     # Processed {lineCount} songs in total\n
     # Total song play count updated: {total_song_play_count}""", default_log, True)
     # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
-
+#endregion
 
 #region Start
 parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library')
@@ -446,7 +465,7 @@ if (
         (os.path.exists(missing_songs_filename) and os.path.getsize(missing_songs_filename) == 0)
         or not os.path.exists(missing_songs_filename)
     ):
-    log(f"\"artist\", \"album\", \"song\", \"artist_mbid\", \"release_mbid\", \"recording_mbid\"", missing_songs_log)
+    log(f"artist,album,song,artist_mbid,release_mbid,recording_mbid", missing_songs_log)
 
 total_start_time = time.perf_counter()
 
@@ -459,6 +478,8 @@ if user_id is None:
 db_query_clear_play_count(user_id)
 main(args.path, conn)
 database_close(conn)
+
+sort_csv(missing_songs_filename)
 
 total_end_time = time.perf_counter()
 total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
