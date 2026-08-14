@@ -11,6 +11,7 @@ import signal
 import sys
 import logging
 import csv
+from pathlib import Path
 from collections import Counter
 from rapidfuzz import fuzz, process
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -298,6 +299,17 @@ def log(message, log_name="default_log", print_to_console=False):
 #endregion
 
 #region csv processor
+def add_sequence_to_file(fname):
+    path = Path(fname)
+    new_path = path
+    counter = 1
+
+    while new_path.exists():
+        new_path = path.parent / f"{path.stem}.{counter:02d}{path.suffix}"
+        counter += 1
+
+    return new_path
+
 def sort_csv(fname):
     with open(fname, mode='r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
@@ -311,7 +323,8 @@ def sort_csv(fname):
     )
 
     header.append("count")
-    with open(fname, mode='w', newline='', encoding='utf-8') as file:
+    new_file_path = fname.rename(add_sequence_to_file(fname))
+    with open(new_file_path, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(header)
         for row, count in sorted_rows:
@@ -374,7 +387,11 @@ def process_json_file(file, conn, total_song_play_count):
                     if not updated_rows or updated_rows == 0:
                         remaining_lines.append(line)
                         try:
-                            log(f"\"{artist}\",\"{album}\",\"{song}\",\"{artist_mbid}\",\"{release_mbid}\",\"{recording_mbid}\"", missing_songs_log)
+                            # save report of missing songs in CSV
+                            csv_row = (artist,album,song,artist_mbid,release_mbid,recording_mbid)
+                            with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as csv_file:
+                                    writer = csv.writer(csv_file)
+                                    writer.writerow(csv_row)
                         except Exception as e:
                             print()
                             log(f"Exception writing to log. {e}", default_log, True)
@@ -460,19 +477,23 @@ signal.signal(signal.SIGINT, signal_handler)
 
 # create loggers
 log_filename = "ImportListenBrainzToNavidrome.log"
-missing_songs_filename = "ImportListenBrainz_missing_songs.csv"
-
 default_log = "default_log"
-missing_songs_log = "missing_songs_log"
 setup_logger(default_log, log_filename, True, logging.DEBUG)
-setup_logger(missing_songs_log, missing_songs_filename, False)
 
+reporting_dir = "./reports"
+# setup missing songs csv report
+missing_songs_filename = "missing_songs.csv"
+missing_songs_path = Path(os.path.join(reporting_dir, missing_songs_filename))
+missing_songs_path.parent.mkdir(parents=True, exist_ok=True)
 # add csv header if first entry
 if (
-        (os.path.exists(missing_songs_filename) and os.path.getsize(missing_songs_filename) == 0)
-        or not os.path.exists(missing_songs_filename)
+        (os.path.exists(missing_songs_path) and os.path.getsize(missing_songs_path) == 0)
+        or not os.path.exists(missing_songs_path)
     ):
-    log(f"artist,album,song,artist_mbid,release_mbid,recording_mbid", missing_songs_log)
+    header = "artist","album","song","artist_mbid","release_mbid","recording_mbid"
+    with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(header)
 
 total_start_time = time.perf_counter()
 
@@ -486,7 +507,7 @@ db_query_clear_play_count(user_id)
 main(args.path, conn)
 database_close(conn)
 
-sort_csv(missing_songs_filename)
+sort_csv(missing_songs_path)
 
 total_end_time = time.perf_counter()
 total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
