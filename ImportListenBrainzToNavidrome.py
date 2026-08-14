@@ -66,7 +66,6 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
         cursor.execute(query, (user_id, recording_mbid, release_mbid))
         rows = cursor.fetchall()
 
-
     if not rows:
         query = """
             SELECT mf.artist_id, mf.album_id, mf.id
@@ -77,7 +76,6 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
         cursor = conn.cursor()
         cursor.execute(query, (user_id, recording_mbid, album))
         rows = cursor.fetchall()
-
 
     if not rows:
         query = """
@@ -91,19 +89,13 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
 
         rows = cursor.fetchall()
 
-
     updated_line_count = 0
-    # if not rows:
-    #     log(f"Unable to find {recording_mbid}, {release_mbid}, {album}, {user_id}", default_log)
 
     for row in rows:
         artist_id, album_id, song_id = row
-        # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
         db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
-        # log(f"Updated Rows: {updated_rows}", default_log)
         
-    # return updated_rows
     return updated_line_count
 
 def db_queries_update_by_title(song, album, artist, listened_at, user_id):
@@ -112,8 +104,6 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
 
     if not song:
         return 0
-
-    # log(f"Attempting to search for {song}, {album}, {artist}", default_log)
 
     if album and artist:
         query = """
@@ -430,12 +420,10 @@ def main(path, conn):
     files = []
     if os.path.isfile(path):
         files = glob.glob(path)
-        log(f"Processing file: {path}", default_log, True)
     elif os.path.isdir(path):
         files = glob.glob(os.path.join(path, '**/*.jsonl'), recursive=True)
-        log(f"dir: {path}", default_log, True)
     else:
-        log(f"invalid file path", default_log)
+        log(f"Invalid file path", default_log, True)
 
     log(f"Found {len(files)} JSON file(s) in the directory: {path}", default_log, True)
 
@@ -457,13 +445,6 @@ def main(path, conn):
     log(f"Processed {fileCount} JSON file(s)", default_log, True)
     log(f"Processed {lineCount} songs in total", default_log, True)
     log(f"Total song play count updated: {total_song_play_count}", default_log, True)
-
-    
-    # log(f"""----- SUMMARY -----\n
-    # Processed {fileCount} JSON file(s)\n
-    # Processed {lineCount} songs in total\n
-    # Total song play count updated: {total_song_play_count}""", default_log, True)
-    # print(f"  Fuzzy: {fuzzy_attempts}. Album: {album_play_count} Artist: {artist_play_count}")
 #endregion
 
 #region Start
