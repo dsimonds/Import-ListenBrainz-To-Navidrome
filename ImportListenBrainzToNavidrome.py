@@ -49,7 +49,6 @@ def standardize_string(text):
 
 #region Database Update Queries
 def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id):
-    updated_rows = 0
     rows = []
 
     if not recording_mbid:
@@ -98,12 +97,30 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
         
     return updated_line_count
 
-def db_queries_update_by_title(song, album, artist, listened_at, user_id):
-    updated_rows = 0
-    rows = []
+def db_queries_update_by_song_id(id_list, user_id, listened_at):
+    updated_row_count = 0
+    
+    for value in id_list:
+        song_id = value[0]
+        album_id = value[1]
+        artist_id = value[2]
+        result = db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
+        if result > 0:
+            updated_row_count += 1
+    
+    return updated_row_count
 
+def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     if not song:
         return 0
+
+    # check if song_id is already cached
+    id_list = cache_dict.get((song, album, artist))
+    if id_list:
+        updated_row_count = db_queries_update_by_song_id(id_list, user_id, listened_at)
+        return updated_row_count
+
+    rows = []
 
     if album and artist:
         query = """
@@ -138,21 +155,19 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     # remove additional text from song/album. Ex: "Song Title - Remastered" or "Song Title (Deluxe Edition)" -> "Song Title"
     if not rows:
         standardized_song = standardize_string(song)
-        standardized_album = standardize_string(song)
+        standardized_album = standardize_string(album)
         # if song or album is changed redo queries
         if (standardized_song != song or standardized_album != album):
             # log(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"", default_log, True)
-            db_queries_update_by_title(standardized_song, standardized_album, artist, listened_at, user_id)
+            return db_queries_update_by_title(standardized_song, standardized_album, artist, listened_at, user_id)
 
     updated_line_count = 0
     for row in rows:
         artist_id, album_id, song_id = row
-        # updated_rows = db_query_update_all_play_count(user_id, artist_id, album_id, song_id)
+        cache_dict.setdefault((song, album, artist), []).append([song_id, album_id, artist_id])
         db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
-        # log(f"Updated Rows: {updated_rows}", default_log)
             
-    # return updated_rows
     return updated_line_count
 
 def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at):
@@ -328,8 +343,8 @@ def process_json_line(line):
 def process_json_file(file, conn, total_song_play_count):
     start_time = time.perf_counter()
 
+    # for diagnostics
     lineNum = 0
-    updated_rows = 0
     total_fuzzy_attempts = 0
     total_album_play_count = 0
     total_artist_play_count = 0
@@ -360,21 +375,22 @@ def process_json_file(file, conn, total_song_play_count):
                         if artists:
                             artist_mbid = artists[0].get("artist_mbid", "Unknown")
 
+                    updated_rows = 0
                     if recording_mbid:
                         updated_rows = db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id)
 
-                    if updated_rows is None or updated_rows == 0:
+                    if updated_rows == 0:
                         updated_rows = db_queries_update_by_title(song, album, artist, listened_at, user_id)
 
-                    # Fuzzy search if can't find song with MusicBrainz ID
-                    if updated_rows is None or updated_rows == 0:
-                        # log(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...", debug_log)
+                    # Fuzzy search if can't find song with MusicBrainz ID or song name
+                    if updated_rows == 0:
+                        # log(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...", default_log)
                         updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
                         total_fuzzy_attempts += updated_rows
                         pass
 
                     # Save records that aren't found
-                    if not updated_rows or updated_rows == 0:
+                    if updated_rows == 0:
                         remaining_lines.append(line)
                         try:
                             # save report of missing songs in CSV
@@ -402,7 +418,7 @@ def process_json_file(file, conn, total_song_play_count):
                     # print(f"  Exception: {e}")
                     log(f"{traceback.print_exc()}", default_log, True)
 
-        if args.remove_completed_songs:
+        if args.remove_updated_songs:
             with open(file, 'w', encoding='utf-8') as currentFile:
                 currentFile.writelines(remaining_lines)
 
@@ -425,7 +441,7 @@ def main(path, conn):
     else:
         log(f"Invalid file path", default_log, True)
 
-    log(f"Found {len(files)} JSON file(s) in the directory: {path}", default_log, True)
+    log(f"Found {len(files)} JSON file(s) to process: {path}", default_log, True)
 
     fileCount = 0
     lineCount = 0
@@ -451,7 +467,7 @@ def main(path, conn):
 parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library')
 parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
 parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
-parser.add_argument('-r', '--remove-completed-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
+parser.add_argument('-ru', '--remove-updated-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
 parser.add_argument('-id', '--mb_id', action='store_true', default=False, help='Improves speed by only updating if MB ID is a match, doesn''t perform text based matching')
 args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
@@ -477,6 +493,9 @@ if (
         writer.writerow(header)
 
 total_start_time = time.perf_counter()
+
+# used for songs missing musicbrainz id for faster lookup
+cache_dict = {}
 
 conn = None
 conn = database_connect(conn)
