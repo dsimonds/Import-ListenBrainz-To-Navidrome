@@ -42,6 +42,7 @@ def exit_script():
 
 def standardize_string(text):
     text = text.split(' - ', 1)[0]
+    text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("—", "_")
     re.sub(r"[\(\[].*?[\)\]]", "", text)
     text.strip()
     return text
