@@ -42,7 +42,7 @@ def exit_script():
 
 def standardize_string(text):
     text = text.split(' - ', 1)[0]
-    text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("—", "_")
+    text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("—", "_").replace("–", "_")
     re.sub(r"[\(\[].*?[\)\]]", "", text)
     text.strip()
     return text
@@ -195,7 +195,7 @@ def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at
 
     with conn:
             updated_rows = conn.executemany(query, data)
-    
+
     return updated_rows.rowcount
     
 def db_query_update_play_count(recording_mbid, song, artist, user_id):
@@ -420,7 +420,8 @@ def process_json_file(file, conn, total_song_play_count):
                     log(f"{traceback.print_exc()}", default_log, True)
 
         if args.remove_updated_songs:
-            with open(file, 'w', encoding='utf-8') as currentFile:
+            missing_songs_json = os.path.join(reporting_dir, "missing_songs.jsonl")
+            with open(missing_songs_json, 'a', encoding='utf-8') as currentFile:
                 currentFile.writelines(remaining_lines)
 
     # print() # clears print(f"\r\033[K...
@@ -478,7 +479,8 @@ log_filename = "ImportListenBrainzToNavidrome.log"
 default_log = "default_log"
 setup_logger(default_log, log_filename, True, logging.DEBUG)
 
-reporting_dir = "./reports"
+now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+reporting_dir = f"./reports/{now}"
 # setup missing songs csv report
 missing_songs_filename = "missing_songs.csv"
 missing_songs_path = Path(os.path.join(reporting_dir, missing_songs_filename))
