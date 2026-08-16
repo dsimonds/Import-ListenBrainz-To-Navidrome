@@ -11,6 +11,7 @@ import signal
 import sys
 import logging
 import csv
+import threading
 from pathlib import Path
 from collections import Counter
 from rapidfuzz import fuzz, process
@@ -215,7 +216,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     return updated_line_count
 
 def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at):
-    
+    updated_row_count = 0
     play_date = str(datetime.datetime.fromtimestamp(listened_at, tz=datetime.timezone.utc))
 
     query = """
@@ -235,22 +236,23 @@ def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at
     if album_id:
         data.append((user_id, album_id, "album", "1", play_date, play_date))
 
-    
     conn = database_connect()
     try:
         with conn:
             updated_rows = conn.executemany(query, data)
+            if updated_rows:
+                    updated_row_count = updated_rows.rowcount
     
     except Exception as e:
         conn.rollback()
     finally:
         database_close(conn)
 
-    return updated_rows.rowcount
+    return updated_row_count
 
     
 def db_query_update_play_count(recording_mbid, song, artist, user_id):
-    updated_rows = 0
+    updated_row_count = 0
     query = """
         UPDATE annotation 
         SET play_count = play_count + 1
@@ -266,12 +268,14 @@ def db_query_update_play_count(recording_mbid, song, artist, user_id):
     try:
         with conn:
             updated_rows = conn.execute(query, (user_id, recording_mbid, artist, song))
+            if updated_rows:
+                updated_row_count = updated_rows.rowcount
     except Exception as e:
         conn.rollback()
     finally:
         database_close(conn)
 
-    return updated_rows.rowcount
+    return updated_row_count
 
 def db_query_update_play_count_fuzzy(song, artist, user_id):
             
@@ -400,9 +404,23 @@ def sort_csv(fname):
             writer.writerow((*row, count))
 #end region
 
+def write_missing_song(data, song_metadata):
+    # save report of missing songs in CSV
+    cache_not_found_set.add(song_metadata)
+    with file_lock_csv:
+        with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(song_metadata)
+
+    # copy missing song json line to new jsonl file
+    if args.remove_updated_songs:
+        missing_songs_json = os.path.join(reporting_dir, "missing_songs.jsonl")
+        with file_lock_jsonl:
+            with open(missing_songs_json, 'a', encoding='utf-8') as jsonl_file:
+                jsonl_file.write(f"{data}\n")
+
 #region main
 def update_record(data, file_play_count, total_fuzzy_attempts):
-    result = None
     song = album = artist = artists = None
     recording_mbid = release_mbid = artist_mbid = None
     try:
@@ -420,6 +438,11 @@ def update_record(data, file_play_count, total_fuzzy_attempts):
             if artists:
                 artist_mbid = artists[0].get("artist_mbid", "Unknown")
 
+        song_metadata = artist,album,song,artist_mbid,release_mbid,recording_mbid
+        if song_metadata in cache_not_found_set:
+            write_missing_song(data, song_metadata)
+            return file_play_count, total_fuzzy_attempts
+
         updated_rows = 0
         if recording_mbid:
             updated_rows = db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, user_id)
@@ -435,13 +458,8 @@ def update_record(data, file_play_count, total_fuzzy_attempts):
 
         # Save records that aren't found
         if updated_rows == 0:
-            result = data
             try:
-                # save report of missing songs in CSV
-                csv_row = (artist,album,song,artist_mbid,release_mbid,recording_mbid)
-                with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as csv_file:
-                    writer = csv.writer(csv_file)
-                    writer.writerow(csv_row)
+                write_missing_song(data, song_metadata)
             except Exception as e:
                 print()
                 log(f"Exception writing to log. {e}", default_log, True)
@@ -453,7 +471,7 @@ def update_record(data, file_play_count, total_fuzzy_attempts):
         print()
         log(f"{traceback.print_exc()}", default_log, True)
 
-    return result, file_play_count, total_fuzzy_attempts
+    return file_play_count, total_fuzzy_attempts
 
 def process_json_file(file, total_song_play_count):
     start_time = time.perf_counter()
@@ -469,29 +487,20 @@ def process_json_file(file, total_song_play_count):
     with open(file, encoding='utf-8', mode='r') as currentFile, ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         lines = currentFile.readlines()
-        remaining_lines = []
+        
         for line in lines:
-            
             lineNum += 1
             if line.strip():  # Skip empty lines
                 data = json.loads(line.strip())
                 futures.append(executor.submit(update_record, data, file_play_count, total_fuzzy_attempts))
 
         for future in as_completed(futures):
-            line, line_play_count, fuzzy_attempts = future.result()
+            line_play_count, fuzzy_attempts = future.result()
             file_play_count += line_play_count
             total_fuzzy_attempts += fuzzy_attempts
             print(f"\r\033[KFile: {file} Play count: {file_play_count}", end="", flush=True)
-            if line:
-                line = str(line)
-                remaining_lines.append(line)
 
         total_song_play_count += file_play_count
-
-        if args.remove_updated_songs:
-            missing_songs_json = os.path.join(reporting_dir, "missing_songs.jsonl")
-            with open(missing_songs_json, 'a', encoding='utf-8') as currentFile:
-                currentFile.writelines(remaining_lines)
 
     end_time = time.perf_counter()
     log(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s", default_log)
@@ -517,7 +526,6 @@ def main(path):
     lineCount = 0
     total_song_play_count = 0
     for file in files:
-        # print (f"Processing file: {file}")
         print()
         print(f"\r\033[KFile: {file}", end="", flush=False)
         fileCount += 1
@@ -541,6 +549,8 @@ parser.add_argument('-ru', '--remove-updated-songs', action='store_true', defaul
 parser.add_argument('-id', '--mb_id', action='store_true', default=False, help='Improves speed by only updating if MB ID is a match, doesn''t perform text based matching')
 args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
+file_lock_csv = threading.Lock()
+file_lock_jsonl = threading.Lock()
 
 # create loggers
 log_filename = "ImportListenBrainzToNavidrome.log"
@@ -567,6 +577,7 @@ total_start_time = time.perf_counter()
 
 # used for songs missing musicbrainz id for faster lookup
 cache_dict = {}
+cache_not_found_set = set()
 
 conn = database_connect()
 user_id = db_get_userid(username)
