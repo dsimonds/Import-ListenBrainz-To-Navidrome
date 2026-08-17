@@ -141,8 +141,14 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
 
     rows = []
     query_ran = None
-    
-    
+
+    if len(song.split()) > 1 and len(album) > 5 and not song.startswith("%"):
+        song = "%" + song + "%"
+    if len(album.split()) > 1 and len(album) > 5 and not album.startswith("%"):
+        album = "%" + album + "%"
+    if len(artist.split()) > 1 and len(album) > 5 and not artist.startswith("%"):
+        artist = "%" + artist + "%"
+        
     if album and artist:
         conn = database_connect()
         try:
@@ -154,7 +160,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"%{song}%", f"%{album}%", f"%{artist}%"))
+            cursor.execute(query, (f"{song}", f"{album}", f"{artist}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
@@ -172,7 +178,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"%{song}%", f"%{album}%"))
+            cursor.execute(query, (f"{song}", f"{album}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
@@ -190,7 +196,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"%{song}%", f"%{artist}%"))
+            cursor.execute(query, (f"{song}", f"{artist}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
