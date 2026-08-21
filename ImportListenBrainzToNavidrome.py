@@ -392,6 +392,9 @@ def add_sequence_to_file(fname):
     return new_path
 
 def sort_csv(fname):
+    if not os.path.exists(missing_songs_path) or os.path.getsize(missing_songs_path) == 0:
+        return
+    
     with open(fname, mode='r', newline='', encoding='utf-8') as file:
         reader = csv.reader(file)
         header = next(reader)
@@ -411,8 +414,19 @@ def sort_csv(fname):
         for row, count in sorted_rows:
             writer.writerow((*row, count))
 #end region
-
+def write_csv_header_if_first_entry():
+    if os.path.exists(missing_songs_path) and os.path.getsize(missing_songs_path) > 0:
+        return
+    
+    # add csv header if first entry
+    header = "artist","album","song","artist_mbid","release_mbid","recording_mbid"
+    with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(header)
+            
 def write_missing_song(data, song_metadata):
+    write_csv_header_if_first_entry()
+    
     # save report of missing songs in CSV
     cache_not_found_set.add(song_metadata)
     with file_lock_csv:
@@ -571,15 +585,6 @@ reporting_dir = f"./reports/{now}"
 missing_songs_filename = "missing_songs.csv"
 missing_songs_path = Path(os.path.join(reporting_dir, missing_songs_filename))
 missing_songs_path.parent.mkdir(parents=True, exist_ok=True)
-# add csv header if first entry
-if (
-        (os.path.exists(missing_songs_path) and os.path.getsize(missing_songs_path) == 0)
-        or not os.path.exists(missing_songs_path)
-    ):
-    header = "artist","album","song","artist_mbid","release_mbid","recording_mbid"
-    with open(missing_songs_path, mode='a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(header)
 
 total_start_time = time.perf_counter()
 
