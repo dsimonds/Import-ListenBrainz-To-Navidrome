@@ -44,8 +44,8 @@ def exit_script():
 def standardize_string(text):
     text = text.split(' - ', 1)[0]
     text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("—", "_").replace("–", "_")
-    re.sub(r"[\(\[].*?[\)\]]", "", text)
-    text.strip()
+    text = re.sub(r"[\(\[].*?[\)\]]", "", text)
+    text = text.strip()
     return text
 
 
@@ -141,15 +141,17 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
 
     rows = []
     query_ran = None
-
-    if len(song.split()) > 1 and len(album) > 5 and not song.startswith("%"):
-        song = "%" + song + "%"
-    if len(album.split()) > 1 and len(album) > 5 and not album.startswith("%"):
-        album = "%" + album + "%"
-    if len(artist.split()) > 1 and len(album) > 5 and not artist.startswith("%"):
-        artist = "%" + artist + "%"
+    song_param = song
+    album_param = album
+    artist_param = artist
+    if len(song.split()) > 1 and len(song) > 5:
+        song_param = "%" + song_param + "%"
+    if len(album.split()) > 1 and len(album) > 5:
+        album_param = "%" + album_param + "%"
+    if len(artist.split()) > 1 and len(artist) > 5:
+        artist_param = "%" + artist_param + "%"
         
-    if album and artist:
+    if album_param and artist_param:
         conn = database_connect()
         try:
             query_ran = "album and artist"
@@ -160,14 +162,14 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song}", f"{album}", f"{artist}"))
+            cursor.execute(query, (f"{song_param}", f"{album_param}", f"{artist_param}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
         finally:
             database_close(conn)
 
-    if not rows or (album and not artist):
+    if not rows or (album_param and not artist_param):
         conn = database_connect()
         try:
             query_ran = "album and not artist"
@@ -178,14 +180,14 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song}", f"{album}"))
+            cursor.execute(query, (f"{song_param}", f"{album_param}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
         finally:
             database_close(conn)
 
-    if not rows or (artist and not album):
+    if not rows or (artist_param and not album_param):
         conn = database_connect()
         try:
             query_ran = "artist and not album"
@@ -196,7 +198,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             """
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song}", f"{artist}"))
+            cursor.execute(query, (f"{song_param}", f"{artist_param}"))
             rows = cursor.fetchall()
         except Exception as e:
             conn.rollback()
