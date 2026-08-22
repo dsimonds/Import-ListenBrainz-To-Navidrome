@@ -40,10 +40,20 @@ def exit_script():
     sys.exit(0)
 
 def standardize_string(text):
-    text = text.split(' - ', 1)[0]
-    text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("—", "_").replace("–", "_")
+    removed_parenthesis = False
+    if text.startswith("%") and text.endswith(""):
+        removed_parenthesis = True
+        text = text.removeprefix("%")
+        text = text.removesuffix("%")
+
+    text = re.split(r" - | – | —", text)[0]
+    text = text.replace("'", "_").replace('"', "_").replace("‘", "_").replace("’", "_").replace("“", "_").replace("-", "_").replace("—", "_").replace("–", "_")
     text = re.sub(r"[\(\[].*?[\)\]]", "", text)
     text = text.strip()
+
+    if removed_parenthesis:
+        text = "%" + text + "%"
+        
     return text
 
 
@@ -106,7 +116,7 @@ def db_queries_update_by_song_id(id_list, user_id, listened_at):
         song_id = value[0]
         album_id = value[1]
         artist_id = value[2]
-        result = db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
+        result = append_to_query_list(user_id, artist_id, album_id, song_id, listened_at)
         if result > 0:
             updated_row_count += 1
     
@@ -117,23 +127,53 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
         return 0
 
     # check if song_id is already cached
-    id_list = cache_dict.get((song, album, artist))
-    if id_list:
-        updated_row_count = db_queries_update_by_song_id(id_list, user_id, listened_at)
-        return updated_row_count
+    id_set = cache_dict.get((song, album, artist))
+    if id_set:
+        found_count = 0
+        try:
+            for item in id_set:
+                append_to_query_list(user_id, item[2], item[1], item[0], listened_at)
+                found_count += 1
+        except Exception as e:
+            print(f"Error for {(song, album, artist)}. {e} ")
+        return found_count
 
     rows = []
     query_ran = None
     song_param = song
     album_param = album
     artist_param = artist
+    # only add % to query if string has more than 1 word AND is longer than 5 characters
+    # to prevent accidentally macthing something like all songs with the word "and" in it
     if len(song.split()) > 1 and len(song) > 5:
         song_param = "%" + song_param + "%"
     if len(album.split()) > 1 and len(album) > 5:
         album_param = "%" + album_param + "%"
     if len(artist.split()) > 1 and len(artist) > 5:
         artist_param = "%" + artist_param + "%"
-        
+
+    # standardize search text by removing additional text from song/album. 
+    # Ex: "Song Title - Remastered" or "Song Title (Deluxe Edition)" -> "Song Title"
+    title_query = "title like ?"
+    album_query = "album like ?"
+    artist_query = "artist like ?"
+
+    song_params = (song_param,)
+    album_params = (album_param,)
+    artist_params = (artist_param,)
+
+    standardized_song = standardize_string(song_param)
+    standardized_album = standardize_string(album_param)
+
+    # if song or album text has been changed
+    if standardized_song != song_param:
+        title_query = "(title like ? or title like ?)"
+        song_params += (standardized_song,)
+
+    if standardized_album != album_param:
+        album_query = "(album like ? or album like ?)"
+        album_params += (standardized_album,)
+
     if album_param and artist_param:
         conn = database_connect()
         with conn:
@@ -141,11 +181,12 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             query = """
                 SELECT artist_id, album_id, id
                 FROM media_file
-                WHERE title like ? AND album like ? AND artist like ?;
+                WHERE
             """
-            # print(f"{query}")
+            query += " " + title_query + " AND " + album_query + " AND " + artist_query + ";"
+            params = song_params + album_params + artist_params
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song_param}", f"{album_param}", f"{artist_param}"))
+            cursor.execute(query, (params))
             rows = cursor.fetchall()
 
     if not rows or (album_param and not artist_param):
@@ -155,11 +196,12 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             query = """
                 SELECT artist_id, album_id, id
                 FROM media_file
-                WHERE title like ? AND album like ?;
+                WHERE
             """
-            # print(f"{query}")
+            query += " " + title_query + " AND " + album_query + ";"
+            params = song_params + album_params
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song_param}", f"{album_param}"))
+            cursor.execute(query, (params))
             rows = cursor.fetchall()
 
     if not rows or (artist_param and not album_param):
@@ -169,26 +211,20 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             query = """
                 SELECT artist_id, album_id, id
                 FROM media_file
-                WHERE title like ? AND artist like ?;
+                WHERE
             """
+            query += " " + title_query + " AND " + artist_query + ";"
+            params = song_params + artist_params
             # print(f"{query}")
             cursor = conn.cursor()
-            cursor.execute(query, (f"{song_param}", f"{artist_param}"))
+            cursor.execute(query, (params))
             rows = cursor.fetchall()
-
-    # remove additional text from song/album. Ex: "Song Title - Remastered" or "Song Title (Deluxe Edition)" -> "Song Title"
-    if not rows:
-        standardized_song = standardize_string(song)
-        standardized_album = standardize_string(album)
-        # if song or album is changed redo queries
-        if (standardized_song != song or standardized_album != album):
-            # log(f"Record not found. Retrying with standardized titles. \"{song}\" -> \"{standardized_song}\" || \"{album}\" -> \"{standardized_album}\"", default_log, True)
-            return db_queries_update_by_title(standardized_song, standardized_album, artist, listened_at, user_id)
 
     updated_line_count = 0
     for row in rows:
         artist_id, album_id, song_id = row
-        cache_dict.setdefault((song, album, artist), []).append([song_id, album_id, artist_id])
+        with cache_lock:
+            cache_dict.setdefault((song, album, artist), set()).add((song_id, album_id, artist_id))
         append_to_query_list(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
             
@@ -525,7 +561,7 @@ def main(path):
 #endregion
 
 #region Start
-parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library')
+parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library to start fresh')
 parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
 parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
 parser.add_argument('-ru', '--remove-updated-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
@@ -534,6 +570,7 @@ args = parser.parse_args()
 signal.signal(signal.SIGINT, signal_handler)
 file_lock_csv = threading.Lock()
 file_lock_jsonl = threading.Lock()
+cache_lock = threading.Lock()
 
 # create loggers
 log_filename = "ImportListenBrainzToNavidrome.log"
