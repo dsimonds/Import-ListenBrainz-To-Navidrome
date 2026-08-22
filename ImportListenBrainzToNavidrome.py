@@ -12,10 +12,12 @@ import sys
 import logging
 import csv
 import threading
+import queue
 from pathlib import Path
 from collections import Counter
-from rapidfuzz import fuzz, process
+from rapidfuzz import fuzz
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 
 #region Global Configs
 # User Configuration
@@ -32,13 +34,9 @@ parser = argparse.ArgumentParser(
 
 def signal_handler(sig, frame):
     print("\n[!] SIGINT (stop signal) detected. Performing clean-up tasks...")
-    if conn:
-        database_close(conn)
     sys.exit(0)
 
 def exit_script():
-    if conn:
-        database_close(conn)
     sys.exit(0)
 
 def standardize_string(text):
@@ -58,62 +56,47 @@ def db_queries_update_by_mbid(recording_mbid, release_mbid, album, listened_at, 
     
     if release_mbid:
         conn = database_connect()
-        try:
+        with conn:
             query = """
-                SELECT mf.artist_id, mf.album_id, mf.id
+                SELECT artist_id, album_id, id
                 FROM media_file AS mf
-                JOIN annotation AS a ON mf.artist_id = a.item_id
-                WHERE user_id = ? AND mf.mbz_recording_id = ? AND mf.mbz_album_id = ?;
+                WHERE mbz_recording_id = ? AND mbz_album_id = ?;
             """
             cursor = conn.cursor()
-            cursor.execute(query, (user_id, recording_mbid, release_mbid))
+            cursor.execute(query, (recording_mbid, release_mbid))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
 
     if not rows:
         conn = database_connect()
-        try:
+        with conn:
             query = """
-                SELECT mf.artist_id, mf.album_id, mf.id
-                FROM media_file AS mf
-                JOIN annotation AS a ON mf.artist_id = a.item_id
-                WHERE user_id = ? AND mf.mbz_recording_id = ?AND mf.album like ?;
+                SELECT artist_id, album_id, id
+                FROM media_file
+                WHERE mbz_recording_id = ? AND album like ?;
             """
             cursor = conn.cursor()
-            cursor.execute(query, (user_id, recording_mbid, album))
+            cursor.execute(query, (recording_mbid, album))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
 
     if not rows:
         conn = database_connect()
-        try:
+        with conn:
             query = """
-                SELECT mf.artist_id, mf.album_id, mf.id
-                FROM media_file AS mf
-                JOIN annotation AS a ON mf.artist_id = a.item_id
-                WHERE user_id = ? AND mf.mbz_recording_id = ?;
+                SELECT artist_id, album_id, id
+                FROM media_file
+                WHERE mbz_recording_id = ?;
             """
             cursor = conn.cursor()
-            cursor.execute(query, (user_id, recording_mbid))
+            cursor.execute(query, (recording_mbid,))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
         
     updated_line_count = 0
 
     for row in rows:
         artist_id, album_id, song_id = row
-        db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
+        append_to_query_list(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
-        
+
     return updated_line_count
 
 def db_queries_update_by_song_id(id_list, user_id, listened_at):
@@ -153,7 +136,7 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
         
     if album_param and artist_param:
         conn = database_connect()
-        try:
+        with conn:
             query_ran = "album and artist"
             query = """
                 SELECT artist_id, album_id, id
@@ -164,14 +147,10 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             cursor = conn.cursor()
             cursor.execute(query, (f"{song_param}", f"{album_param}", f"{artist_param}"))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
 
     if not rows or (album_param and not artist_param):
         conn = database_connect()
-        try:
+        with conn:
             query_ran = "album and not artist"
             query = """
                 SELECT artist_id, album_id, id
@@ -182,14 +161,10 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             cursor = conn.cursor()
             cursor.execute(query, (f"{song_param}", f"{album_param}"))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
 
     if not rows or (artist_param and not album_param):
         conn = database_connect()
-        try:
+        with conn:
             query_ran = "artist and not album"
             query = """
                 SELECT artist_id, album_id, id
@@ -200,10 +175,6 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
             cursor = conn.cursor()
             cursor.execute(query, (f"{song_param}", f"{artist_param}"))
             rows = cursor.fetchall()
-        except Exception as e:
-            conn.rollback()
-        finally:
-            database_close(conn)
 
     # remove additional text from song/album. Ex: "Song Title - Remastered" or "Song Title (Deluxe Edition)" -> "Song Title"
     if not rows:
@@ -218,127 +189,115 @@ def db_queries_update_by_title(song, album, artist, listened_at, user_id):
     for row in rows:
         artist_id, album_id, song_id = row
         cache_dict.setdefault((song, album, artist), []).append([song_id, album_id, artist_id])
-        db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at)
+        append_to_query_list(user_id, artist_id, album_id, song_id, listened_at)
         updated_line_count += 1
             
     return updated_line_count
 
-def db_query_update_or_insert(user_id, artist_id, album_id, song_id, listened_at):
+def db_query_update_play_count_fuzzy(song, artist, user_id, listened_at):
     updated_row_count = 0
-    play_date = str(datetime.datetime.fromtimestamp(listened_at, tz=datetime.timezone.utc))
-
-    query = """
-        INSERT INTO annotation(user_id, item_id, item_type, play_count, play_date) 
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, item_id, item_type) 
-            DO UPDATE SET play_count = play_count + 1, play_date = ?;
-    """
-    data = []
-
-    if song_id:
-        data.append((user_id, song_id, "media_file", "1", play_date, play_date))
-
-    if artist_id:
-        data.append((user_id, artist_id, "artist", "1", play_date, play_date))
-
-    if album_id:
-        data.append((user_id, album_id, "album", "1", play_date, play_date))
-
     conn = database_connect()
-    try:
-        with conn:
-            updated_rows = conn.executemany(query, data)
-            if updated_rows:
-                    updated_row_count = updated_rows.rowcount
-    
-    except Exception as e:
-        conn.rollback()
-    finally:
-        database_close(conn)
-
-    return updated_row_count
-
-    
-def db_query_update_play_count(recording_mbid, song, artist, user_id):
-    updated_row_count = 0
-    query = """
-        UPDATE annotation 
-        SET play_count = play_count + 1
-        WHERE user_id = ? AND item_id IN
-        (
-            SELECT mf.id
-            FROM media_file mf
-            WHERE mf.mbz_recording_id =  ? AND mf.artist like ? AND mf.title like ?
-        );
-    """
-
-    conn = database_connect()
-    try:
-        with conn:
-            updated_rows = conn.execute(query, (user_id, recording_mbid, artist, song))
-            if updated_rows:
-                updated_row_count = updated_rows.rowcount
-    except Exception as e:
-        conn.rollback()
-    finally:
-        database_close(conn)
-
-    return updated_row_count
-
-def db_query_update_play_count_fuzzy(song, artist, user_id):
-            
-    conn = database_connect()
-    try:
+    with closing(conn):
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT mf.artist, mf.title, mf.mbz_recording_id
-            FROM media_file AS mf
-            JOIN annotation AS a ON mf.artist_id = a.item_id
-            WHERE user_id = ?;
-        """, (user_id,)) #(user_id, artist, name))
+            SELECT artist, title, artist_id, album_id, id
+            FROM media_file
+        """) #(user_id, artist, name))
         rows = cursor.fetchall()
-    except Exception as e:
-        conn.rollback()
-    finally:
-        database_close(conn)
     
     #--AND mf.artist like ? 
     #--AND mf.title like ?;
 
     for row in rows:
-        db_artist, db_title, db_recording_mbid = row
+        db_artist, db_title, artist_id, album_id, song_id = row
         similarity_artist = fuzz.ratio(db_artist.lower(), artist.lower())
         similarity_title = fuzz.ratio(db_title.lower(), song.lower())
 
         if similarity_artist > 80 and similarity_title > 80:
-            # log(f"Fuzzy match found: {artist} - {title} (Play Count: {play_count})", default_log)
-            return db_query_update_play_count(db_recording_mbid, db_title, db_artist, user_id)
+            append_to_query_list(user_id, artist_id, album_id, song_id, listened_at)
+            updated_row_count += 1
 
-    return 0
+    return updated_row_count
 
 def db_query_clear_play_count(user_id):
 
     if not args.reset_count_all:
         return
-    try:
-        conn = database_connect()
+
+    conn = database_connect()
+    with conn:
         query = """
             UPDATE annotation
             SET play_count = 0
             WHERE user_id = ?;
         """
+        conn.execute(query, (user_id,))
 
-        with conn:
-            conn.execute(query, (user_id,))
-    finally:
-        database_close(conn)
+def append_to_query_list(user_id, artist_id, album_id, song_id, listened_at):
+    listened_at_formatted = str(datetime.datetime.fromtimestamp(listened_at, tz=datetime.timezone.utc))
+    if song_id:
+        update_query_queue.put((user_id, song_id, "media_file", 1, listened_at_formatted))
+        # print(f"Put: {(user_id, song_id, "media_file", "1", listened_at_formatted, listened_at_formatted)}")
+
+    if artist_id:
+        update_query_queue.put((user_id, artist_id, "artist", 1, listened_at_formatted))
+        # print(f"Put: {(user_id, artist_id, "artist", "1", listened_at_formatted, listened_at_formatted)}")
+
+    if album_id:
+        update_query_queue.put((user_id, album_id, "album", 1, listened_at_formatted))
+        # print(f"Put: {(user_id, album_id, "album", "1", listened_at_formatted, listened_at_formatted)}")
+
+    # print()
+    # print(f"queue size: {update_query_queue.qsize()}")
+
+def process_query_list():
+    # update_query_queue.put((user_id, album_id, "album", 1, listened_at_formatted))
+    # insert into table. if conflict (duplicate key), update record instead
+    query = """
+        INSERT INTO annotation(user_id, item_id, item_type, play_count, play_date) 
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, item_id, item_type) 
+            DO UPDATE SET play_count = annotation.play_count + 1, play_date = EXCLUDED.play_date;
+    """
+
+    # batch process queue
+    batch_size = 500
+    total_processed = 0
+    
+    while not update_query_queue.empty():
+        batch = []
+        try:
+            while len(batch) < batch_size:
+                batch.append(update_query_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        # for row in batch:
+        #     conn = database_connect()
+        #         with conn:
+        
+        if batch:
+            conn = database_connect()
+            with conn:
+                cursor = conn.cursor()
+                cursor.executemany(query, batch)
+                # cursor.execute("PRAGMA wal_checkpoint(FULL);")
+                # conn.execute("PRAGMA journal_mode=WAL;")
+
+            total_processed += len(batch)
+
+    # print(f"Processed rows: {total_processed}")
+
 #endregion
 
 #region Database Connection
 def db_get_userid(username):
+    conn = database_connect()
     with conn:
-        cursor = conn.execute("SELECT id FROM user WHERE user_name = ?;", (username,))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM user WHERE user_name = ?;", (username,))
         result = cursor.fetchone()
+        cursor.close()
         if result:
             return result[0]
         else:
@@ -413,6 +372,7 @@ def sort_csv(fname):
         writer.writerow(header)
         for row, count in sorted_rows:
             writer.writerow((*row, count))
+
 #end region
 def write_csv_header_if_first_entry():
     if os.path.exists(missing_songs_path) and os.path.getsize(missing_songs_path) > 0:
@@ -435,11 +395,10 @@ def write_missing_song(data, song_metadata):
             writer.writerow(song_metadata)
 
     # copy missing song json line to new jsonl file
-    if args.remove_updated_songs:
-        missing_songs_json = os.path.join(reporting_dir, "missing_songs.jsonl")
-        with file_lock_jsonl:
-            with open(missing_songs_json, 'a', encoding='utf-8') as jsonl_file:
-                jsonl_file.write(f"{data}\n")
+    missing_songs_json = os.path.join(reporting_dir, "missing_songs.jsonl")
+    with file_lock_jsonl:
+        with open(missing_songs_json, 'a', encoding='utf-8') as jsonl_file:
+            jsonl_file.write(json.dumps(data, ensure_ascii=False) + "\n")
 
 #region main
 def update_record(data, file_play_count, total_fuzzy_attempts):
@@ -475,7 +434,7 @@ def update_record(data, file_play_count, total_fuzzy_attempts):
         # # Fuzzy search if can't find song with MusicBrainz ID or song name
         if updated_rows == 0:
             # log(f"No exact match found for {artist} - {song}. Attempting fuzzy matching...", default_log)
-            updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id)
+            updated_rows = db_query_update_play_count_fuzzy(song, artist, user_id, listened_at)
             total_fuzzy_attempts += updated_rows
 
         # Save records that aren't found
@@ -496,8 +455,6 @@ def update_record(data, file_play_count, total_fuzzy_attempts):
     return file_play_count, total_fuzzy_attempts
 
 def process_json_file(file, total_song_play_count):
-    start_time = time.perf_counter()
-
     # for diagnostics
     lineNum = 0
     total_fuzzy_attempts = 0
@@ -524,8 +481,7 @@ def process_json_file(file, total_song_play_count):
 
         total_song_play_count += file_play_count
 
-    end_time = time.perf_counter()
-    log(f"Processed {lineNum} lines in {(end_time - start_time):.2f}s", default_log)
+    process_query_list()
 
     # print(f"total_fuzzy_attempts: {total_fuzzy_attempts}")
     return lineNum, total_song_play_count, total_fuzzy_attempts, total_album_play_count, total_artist_play_count
@@ -548,13 +504,18 @@ def main(path):
     lineCount = 0
     total_song_play_count = 0
     for file in files:
+        total_start_time = time.perf_counter()
         print()
         print(f"\r\033[KFile: {file}", end="", flush=False)
         fileCount += 1
         lines, total_song_play_count, fuzzy_attempts, album_play_count, artist_play_count = process_json_file(file, total_song_play_count)
-        print()
-        log(f"Current total play count: {total_song_play_count}", default_log, True)
         lineCount += lines
+        total_end_time = time.perf_counter()
+        total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
+        print()
+        log(f"Completed {lines} lines in {total_time_formatted}", default_log, True)
+        log(f"Current total play count: {total_song_play_count}", default_log, True)
+        # log(f"Fuzzy Attempts: {fuzzy_attempts}", default_log, True)
 
     print()
     log("----- SUMMARY -----", default_log, True)
@@ -591,10 +552,9 @@ total_start_time = time.perf_counter()
 # used for songs missing musicbrainz id for faster lookup
 cache_dict = {}
 cache_not_found_set = set()
+update_query_queue = queue.Queue()
 
-conn = database_connect()
 user_id = db_get_userid(username)
-database_close(conn)
 
 if user_id is None:
     log("User ID not found. Exiting", default_log, True)
@@ -603,11 +563,11 @@ if user_id is None:
 db_query_clear_play_count(user_id)
 
 main(args.path)
-database_close(conn)
 
 sort_csv(missing_songs_path)
 
 total_end_time = time.perf_counter()
 total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
 print(f"Completed in {total_time_formatted}")
+print(f"Logs and a list of unmatched songs can be found in: {reporting_dir}")
 #endregion
