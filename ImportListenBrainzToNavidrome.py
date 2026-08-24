@@ -23,7 +23,7 @@ from contextlib import closing
 # User Configuration
 listenbrainz_export_path = './listenbrainz_1Maple_1786052646' #'/path/to/listenbrainz/json/files'  # Replace with the actual path to your JSON files
 navidrome_db_path = 'navidrome.db'  # Replace with the actual path to your Navidrome database file
-username = 'dsimonds'  # Replace with your actual username
+username = 'username'  # Replace with your actual username
 
 parser = argparse.ArgumentParser(
     prog='Import ListenBrainz to Navidrome',
@@ -561,50 +561,61 @@ def main(path):
 #endregion
 
 #region Start
-parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library to start fresh')
-parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
-parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
-parser.add_argument('-ru', '--remove-updated-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
-parser.add_argument('-id', '--mb_id', action='store_true', default=False, help='Improves speed by only updating if MB ID is a match, doesn''t perform text based matching')
-args = parser.parse_args()
-signal.signal(signal.SIGINT, signal_handler)
-file_lock_csv = threading.Lock()
-file_lock_jsonl = threading.Lock()
-cache_lock = threading.Lock()
+if __name__ == '__main__':
+    parser.add_argument('-u', '--username', action='store', default='', help='Navidrome username')
+    parser.add_argument('-p', '--path', action='store', default='./', help='File path to ListenBrainz Export. Defaults to current directory')
+    parser.add_argument('-db', '--database', action='store', default='', help='Location of Navidrome.db file')
+    parser.add_argument('--reset-count-all', action='store_true', default=False, help='Reset play count for entire library to start fresh')
+    parser.add_argument('--reset-count-per-song', action='store_true', default=False, help='Only reset play count if that song is updated')
+    parser.add_argument('-ru', '--remove-updated-songs', action='store_true', default=False, help='Remove lines from JSON files when song is processed')
+    parser.add_argument('-id', '--mb_id', action='store_true', default=False, help='Improves speed by only updating if MB ID is a match, doesn''t perform text based matching')
+    args = parser.parse_args()
 
-# create loggers
-log_filename = "ImportListenBrainzToNavidrome.log"
-default_log = "default_log"
-setup_logger(default_log, log_filename, True, logging.DEBUG)
+    if args.database:
+        navidrome_db_path = args.database
 
-now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-reporting_dir = f"./reports/{now}"
-# setup missing songs csv report
-missing_songs_filename = "missing_songs.csv"
-missing_songs_path = Path(os.path.join(reporting_dir, missing_songs_filename))
-missing_songs_path.parent.mkdir(parents=True, exist_ok=True)
+    if args.username:
+        username = args.username
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    file_lock_csv = threading.Lock()
+    file_lock_jsonl = threading.Lock()
+    cache_lock = threading.Lock()
 
-total_start_time = time.perf_counter()
+    # create loggers
+    log_filename = "ImportListenBrainzToNavidrome.log"
+    default_log = "default_log"
+    setup_logger(default_log, log_filename, True, logging.DEBUG)
 
-# used for songs missing musicbrainz id for faster lookup
-cache_dict = {}
-cache_not_found_set = set()
-update_query_queue = queue.Queue()
+    now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    reporting_dir = f"./reports/{now}"
+    # setup missing songs csv report
+    missing_songs_filename = "missing_songs.csv"
+    missing_songs_path = Path(os.path.join(reporting_dir, missing_songs_filename))
+    missing_songs_path.parent.mkdir(parents=True, exist_ok=True)
 
-user_id = db_get_userid(username)
+    total_start_time = time.perf_counter()
 
-if user_id is None:
-    log("User ID not found. Exiting", default_log, True)
-    exit_script()
+    # used for songs missing musicbrainz id for faster lookup
+    cache_dict = {}
+    cache_not_found_set = set()
+    update_query_queue = queue.Queue()
 
-db_query_clear_play_count(user_id)
+    user_id = db_get_userid(username)
 
-main(args.path)
+    if user_id is None:
+        log("User ID not found. Exiting", default_log, True)
+        exit_script()
 
-sort_csv(missing_songs_path)
+    db_query_clear_play_count(user_id)
 
-total_end_time = time.perf_counter()
-total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
-print(f"Completed in {total_time_formatted}")
-print(f"Logs and a list of unmatched songs can be found in: {reporting_dir}")
+    main(args.path)
+
+    sort_csv(missing_songs_path)
+
+    total_end_time = time.perf_counter()
+    total_time_formatted = str(datetime.timedelta(seconds=(total_end_time - total_start_time)))
+    print(f"Completed in {total_time_formatted}")
+    print(f"Logs and a list of unmatched songs can be found in: {reporting_dir}")
 #endregion
